@@ -1,0 +1,57 @@
+# ==================================================
+# Streamlit Production Requirements
+# PDF仕訳抽出システム - Claude Sonnet 4.0版
+# ==================================================
+
+# ==================================================
+# Core Web Framework
+# ==================================================
+streamlit>=1.32.0
+
+# ==================================================
+# AI API - Claude Sonnet 4.0 Only
+# ==================================================
+anthropic>=0.34.2
+
+# ==================================================
+# PDF Processing
+# ==================================================
+PyPDF2>=3.0.1
+PyMuPDF>=1.23.24
+Pillow>=10.1.0
+
+# ==================================================
+# Data Processing
+# ==================================================
+pandas>=2.1.4
+numpy>=1.26.2
+
+# ==================================================
+# Configuration & Environment
+# ==================================================
+python-dotenv>=1.0.1
+
+# ==================================================
+# Optional Production Enhancements
+# ==================================================
+
+# Enhanced date processing (for Japanese date formats)
+python-dateutil>=2.8.2
+
+# Type annotations support
+typing-extensions>=4.9.0
+
+# ==================================================
+# Deployment Notes
+# ==================================================
+# 
+# For Streamlit Cloud deployment:
+# 1. Ensure Python >= 3.8
+# 2. Set ANTHROPIC_API_KEY in Streamlit secrets
+# 3. Configure USE_MOCK_DATA=false for production
+# 
+# System dependencies (if required):
+# - poppler-utils (for enhanced PDF processing)
+# - libmagic1 (for file type detection)
+#
+# ==================================================

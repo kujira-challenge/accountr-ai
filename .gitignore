@@ -1,0 +1,191 @@
+# ==================================================
+# Production OCR System - Git Ignore File
+# ==================================================
+
+# ==================================================
+# Environment and Configuration Files
+# ==================================================
+.env
+.env.local
+.env.production
+config.local.py
+secrets.json
+api_keys.json
+
+# ==================================================
+# Streamlit Secrets (重要: 絶対にコミットしない)
+# ==================================================
+.streamlit/secrets.toml
+**/secrets.toml
+
+# ==================================================
+# API Keys and Credentials
+# ==================================================
+**/api_keys/
+**/credentials/
+**/*_key.json
+**/*_credentials.json
+**/*_token.txt
+**/service-account-*.json
+
+# ==================================================
+# Output and Temporary Files
+# ==================================================
+output/
+temp/
+logs/
+debug_outputs/
+*.log
+*.csv
+*.xlsx
+*.json
+!requirements.json
+!package.json
+
+# ==================================================
+# PDF Processing Files
+# ==================================================
+*.pdf
+*_pages_*.pdf
+temp_*.pdf
+split_*.pdf
+
+# ==================================================
+# Python
+# ==================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ==================================================
+# Virtual Environments
+# ==================================================
+.env/
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.python-version
+
+# ==================================================
+# IDE and Editor Files
+# ==================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ==================================================
+# Testing and Coverage
+# ==================================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# ==================================================
+# Documentation
+# ==================================================
+docs/_build/
+.sphinx/
+
+# ==================================================
+# Database Files
+# ==================================================
+*.db
+*.sqlite
+*.sqlite3
+
+# ==================================================
+# Backup Files
+# ==================================================
+backup/
+backups/
+*.backup
+*.bak
+*.old
+
+# ==================================================
+# System Files
+# ==================================================
+.sys
+.system
+*.pid
+*.lock
+
+# ==================================================
+# Custom Application Files
+# ==================================================
+user_configs/
+custom_patterns/
+local_models/
+
+# ==================================================
+# Windows Specific
+# ==================================================
+*.exe
+*.msi
+*.msm
+*.msp
+desktop.ini
+$RECYCLE.BIN/
+
+# ==================================================
+# macOS Specific
+# ==================================================
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# ==================================================
+# Linux Specific
+# ==================================================
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
