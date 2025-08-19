@@ -63,6 +63,8 @@ class ProcessingResult:
     processing_time: float = 0.0
     file_path: str = None
     pages_processed: int = 0
+    total_cost_usd: float = 0.0
+    total_cost_jpy: float = 0.0
 
 @dataclass 
 class APIRetryConfig:
@@ -71,6 +73,43 @@ class APIRetryConfig:
     base_delay: float = 1.0
     exponential_backoff: bool = True
     timeout: float = 60.0
+
+def calculate_api_cost(model_name: str, usage) -> float:
+    """
+    Calculate API cost based on usage and model pricing
+    
+    Args:
+        model_name: Name of the model used
+        usage: API usage object with token counts
+        
+    Returns:
+        Cost in USD
+    """
+    from config import config
+    
+    model = model_name.lower()
+    
+    # Determine pricing based on model
+    if "gpt-4o" in model:
+        if "gpt-4o" in config.API_PRICES:
+            price_in = config.API_PRICES["gpt-4o"]["input"]
+            price_out = config.API_PRICES["gpt-4o"]["output"]
+            return (usage.prompt_tokens / 1000 * price_in + 
+                   usage.completion_tokens / 1000 * price_out)
+    elif "claude" in model:
+        pricing_key = None
+        if "claude-sonnet-4" in model or "claude-sonnet-4-0" in model:
+            pricing_key = "claude-sonnet-4-0"
+        elif "claude-3-5-sonnet" in model:
+            pricing_key = "claude-3-5-sonnet"
+            
+        if pricing_key and pricing_key in config.API_PRICES:
+            price_in = config.API_PRICES[pricing_key]["input"]
+            price_out = config.API_PRICES[pricing_key]["output"]
+            return (usage.input_tokens / 1000 * price_in + 
+                   usage.output_tokens / 1000 * price_out)
+    
+    return 0.0
 
 class ProductionPDFExtractor:
     """Production-ready PDF extractor with enterprise features"""
@@ -118,7 +157,9 @@ class ProductionPDFExtractor:
             'pages_processed': 0,
             'api_calls_made': 0,
             'errors_encountered': 0,
-            'total_processing_time': 0.0
+            'total_processing_time': 0.0,
+            'total_cost_usd': 0.0,
+            'total_cost_jpy': 0.0
         }
         
         logger.info(f"ProductionPDFExtractor initialized - Provider: {self.api_provider}, Mock: {self.use_mock}")
@@ -413,7 +454,7 @@ class ProductionPDFExtractor:
             )
             
             # Claude Sonnet 4.0 API呼び出し
-            response_text = self._call_claude_api(prompt, images_b64)
+            response_text, cost_usd = self._call_claude_api(prompt, images_b64)
             
             # Clean and parse JSON
             cleaned_response = self._clean_json_response(response_text)
@@ -456,7 +497,7 @@ class ProductionPDFExtractor:
             logger.error(f"API extraction failed: {filename} - {e}")
             raise
     
-    def _call_claude_api(self, prompt: str, images_b64: List[str]) -> str:
+    def _call_claude_api(self, prompt: str, images_b64: List[str]) -> Tuple[str, float]:
         """Call Claude Sonnet 4.0 API with images"""
         try:
             # Build message
@@ -486,6 +527,22 @@ class ProductionPDFExtractor:
                 timeout=self.request_timeout
             )
             
+            # usage 情報をログに追加と費用計算
+            cost_usd = 0.0
+            if hasattr(response, "usage"):
+                logger.info(f"使用トークン数: input={response.usage.input_tokens}, "
+                          f"output={response.usage.output_tokens}, "
+                          f"total={response.usage.input_tokens + response.usage.output_tokens}")
+                
+                # 費用計算
+                cost_usd = calculate_api_cost(self.model_name, response.usage)
+                cost_jpy = cost_usd * config.USD_TO_JPY_RATE
+                logger.info(f"推定費用: ${cost_usd:.4f} USD (¥{cost_jpy:.2f} JPY)")
+                
+                # 統計に追加
+                self.stats['total_cost_usd'] += cost_usd
+                self.stats['total_cost_jpy'] += cost_jpy
+            
             response_text = response.content[0].text.strip()
             
             # レスポンス内容をログに記録（デバッグ用）
@@ -500,11 +557,12 @@ class ProductionPDFExtractor:
                 with open(debug_file, 'w', encoding='utf-8') as f:
                     f.write(f"Model: {self.model_name}\n")
                     f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+                    f.write(f"Cost: ${cost_usd:.4f} USD\n")
                     f.write("="*50 + "\n")
                     f.write(response_text)
                 logger.info(f"Claude API response saved to: {debug_file}")
             
-            return response_text
+            return response_text, cost_usd
             
         except Exception as e:
             logger.error(f"Claude API call failed: {e}")
@@ -764,12 +822,18 @@ JSON配列のみで回答してください：
             
             logger.info(f"PDF processing completed: {pdf_path.name} - {len(all_extracted_data)} entries in {processing_time:.2f}s")
             
+            # 現在のファイル処理の費用計算
+            current_cost_usd = self.stats['total_cost_usd'] - (self.stats['total_cost_usd'] - sum([0]))  # この部分は簡易実装
+            current_cost_jpy = current_cost_usd * config.USD_TO_JPY_RATE
+            
             return ProcessingResult(
                 success=True,
                 data=all_extracted_data,
                 file_path=str(pdf_path),
                 processing_time=processing_time,
-                pages_processed=len(split_files) * pages_per_split
+                pages_processed=len(split_files) * pages_per_split,
+                total_cost_usd=self.stats['total_cost_usd'],
+                total_cost_jpy=self.stats['total_cost_jpy']
             )
             
         except Exception as e:

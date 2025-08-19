@@ -158,6 +158,18 @@ class Config:
     GENERATE_TEST_REPORTS = os.getenv('GENERATE_TEST_REPORTS', 'false').lower() == 'true'
     
     # ==================================================
+    # API Pricing Configuration (USD per 1K tokens)
+    # ==================================================
+    API_PRICES = {
+        "gpt-4o": {"input": 0.005, "output": 0.015},
+        "claude-3-5-sonnet": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-0": {"input": 0.003, "output": 0.015},  # Same as Claude 3.5 Sonnet
+    }
+    
+    # USD to JPY conversion rate (approximate)
+    USD_TO_JPY_RATE = float(os.getenv('USD_TO_JPY_RATE', '150'))
+
+    # ==================================================
     # CSV Field Definitions
     # ==================================================
     CSV_COLUMNS = [

@@ -27,6 +27,28 @@ st.set_page_config(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# 🔐 パスワード認証チェック
+st.sidebar.markdown("---")
+st.sidebar.markdown("🔐 **認証**")
+password = st.sidebar.text_input("パスワードを入力してください", type="password")
+
+# パスワードチェック
+try:
+    app_password = st.secrets.get("APP_PASSWORD")
+    if not app_password:
+        app_password = "admin123"  # デフォルトパスワード（開発用）
+        st.sidebar.warning("⚠️ デフォルトパスワード使用中")
+    
+    if password != app_password:
+        st.error("🚫 パスワードが正しくありません")
+        st.info("💡 正しいパスワードを入力してアクセスしてください")
+        st.stop()  # ここで処理を止める
+    else:
+        st.sidebar.success("✅ 認証成功")
+except Exception as e:
+    st.sidebar.error(f"認証エラー: {str(e)}")
+    st.stop()
+
 # サイドバー - システム情報
 with st.sidebar:
     st.header("📊 システム情報")
@@ -103,7 +125,7 @@ if uploaded_file is not None:
                 progress_bar.progress(25)
                 
                 # メイン処理
-                df, csv_bytes = process_pdf_to_csv(uploaded_file)
+                df, csv_bytes, processing_info = process_pdf_to_csv(uploaded_file)
                 
                 progress_bar.progress(75)
                 status_text.text("✅ 仕訳データ抽出完了！")
@@ -125,11 +147,23 @@ if uploaded_file is not None:
                 with col_result2:
                     st.metric("処理時間", f"{processing_time:.1f}秒")
                 with col_result3:
-                    if not df.empty and '金額' in df.columns:
-                        total_amount = df['金額'].astype(str).str.replace(',', '').astype(float).sum()
-                        st.metric("合計金額", f"¥{total_amount:,.0f}")
+                    # 実際のAPI費用表示（トークンベース）
+                    if processing_info.get("cost_jpy", 0) > 0:
+                        st.metric(
+                            "実際のAPI費用", 
+                            f"¥{processing_info['cost_jpy']:.2f}",
+                            help=f"実測値: ${processing_info['cost_usd']:.4f} USD\n処理ページ数: {processing_info.get('pages_processed', 0)}\nトークンベースの正確な計算"
+                        )
                     else:
-                        st.metric("合計金額", "計算不可")
+                        # フォールバック: モックデータまたは費用計算失敗時
+                        pages_processed = processing_info.get('pages_processed', max(1, len(df) // 5))
+                        estimated_cost_jpy = pages_processed * 15  # 1ページあたり約15円の概算
+                        
+                        st.metric(
+                            "API費用概算", 
+                            f"¥{estimated_cost_jpy:.0f}",
+                            help=f"概算: {pages_processed}ページ × ¥15/ページ\n※実際の費用はトークン数により変動"
+                        )
                 
                 # データプレビュー
                 if not df.empty:

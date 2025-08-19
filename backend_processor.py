@@ -8,7 +8,7 @@ PDFをアップロードしてCSV形式で仕訳データを出力する
 import io
 import tempfile
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Dict, Any
 import pandas as pd
 import logging
 
@@ -19,7 +19,7 @@ from config import config
 # ログ設定
 logger = logging.getLogger(__name__)
 
-def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes]:
+def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, Any]]:
     """
     アップロードされたPDFファイルを処理してCSVデータを返す
     
@@ -27,7 +27,7 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes]:
         uploaded_file: Streamlit UploadedFile object
         
     Returns:
-        Tuple[pd.DataFrame, bytes]: (データフレーム, CSV bytes)
+        Tuple[pd.DataFrame, bytes, Dict[str, Any]]: (データフレーム, CSV bytes, 処理情報)
     """
     logger.info(f"Processing uploaded PDF: {uploaded_file.name}")
     
@@ -86,4 +86,13 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes]:
         
         logger.info(f"CSV data prepared: {len(df)} rows, {len(csv_bytes)} bytes")
         
-        return df, csv_bytes
+        # 処理情報を準備
+        processing_info = {
+            "cost_usd": result.total_cost_usd,
+            "cost_jpy": result.total_cost_jpy,
+            "processing_time": result.processing_time,
+            "pages_processed": result.pages_processed,
+            "entries_extracted": len(df)
+        }
+        
+        return df, csv_bytes, processing_info
