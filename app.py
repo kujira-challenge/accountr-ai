@@ -153,7 +153,7 @@ if uploaded_file is not None:
                 with col_result2:
                     st.metric("処理時間", f"{processing_time:.1f}秒")
                 with col_result3:
-                    # 実際のAPI費用表示（トークンベース）
+                    # API費用概算表示（トークンベース）
                     if processing_info.get("cost_jpy", 0) > 0:
                         # 最新レート情報を取得して表示
                         try:
@@ -163,9 +163,9 @@ if uploaded_file is not None:
                             rate_info = "為替レート: 取得失敗"
                             
                         st.metric(
-                            "実際のAPI費用", 
+                            "API費用概算", 
                             f"¥{processing_info['cost_jpy']:.2f}",
-                            help=f"実測値: ${processing_info['cost_usd']:.4f} USD\n処理ページ数: {processing_info.get('pages_processed', 0)}\n{rate_info}\nトークンベースの正確な計算"
+                            help=f"⚠️ 概算値です。実際の請求と異なる場合があります。\n\n計算値: ${processing_info['cost_usd']:.4f} USD\n処理ページ数: {processing_info.get('pages_processed', 0)}\n{rate_info}\nトークン使用量に基づく概算計算\n\n※ 為替レート変動や請求タイミングにより実際の費用と差が生じる可能性があります"
                         )
                     else:
                         # フォールバック: モックデータまたは費用計算失敗時
