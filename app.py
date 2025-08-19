@@ -136,8 +136,11 @@ if uploaded_file is not None:
                 
                 processing_time = (datetime.now() - start_time).total_seconds()
                 
-                # 結果表示
-                st.success(f"🎉 変換が完了しました！処理時間: {processing_time:.1f}秒")
+                # 結果表示（エラー情報がある場合は警告表示）
+                if processing_info.get("error"):
+                    st.warning(f"⚠️ 処理は完了しましたが、一部でエラーが発生しました: {processing_info['error']}")
+                else:
+                    st.success(f"🎉 変換が完了しました！処理時間: {processing_time:.1f}秒")
                 
                 # プログレスバーを削除
                 progress_bar.empty()
@@ -217,6 +220,15 @@ if uploaded_file is not None:
             except Exception as e:
                 st.error(f"💥 変換に失敗しました: {str(e)}")
                 logger.error(f"PDF processing error: {e}", exc_info=True)
+                
+                # エラー時でも処理情報を初期化
+                processing_info = {
+                    "cost_usd": 0.0,
+                    "cost_jpy": 0.0,
+                    "processing_time": 0.0,
+                    "pages_processed": 0,
+                    "entries_extracted": 0
+                }
                 
                 # エラー詳細（デバッグモード時）
                 if config.DEBUG_MODE:

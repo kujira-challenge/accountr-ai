@@ -117,5 +117,5 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
             "error": str(e)
         }
         
-        # エラーを再発生させる
-        raise Exception(f"PDF processing failed: {str(e)}")
+        # エラー情報を含む3つの戻り値を返す（エラーを再発生させない）
+        return empty_df, empty_csv_bytes, error_info

@@ -529,20 +529,26 @@ class ProductionPDFExtractor:
             
             # usage 情報をログに追加と費用計算
             cost_usd = 0.0
-            if hasattr(response, "usage"):
-                logger.info(f"使用トークン数: input={response.usage.input_tokens}, "
-                          f"output={response.usage.output_tokens}, "
-                          f"total={response.usage.input_tokens + response.usage.output_tokens}")
-                
-                # 費用計算
-                cost_usd = calculate_api_cost(self.model_name, response.usage)
-                current_usd_rate = config.get_current_usd_to_jpy_rate()
-                cost_jpy = cost_usd * current_usd_rate
-                logger.info(f"推定費用: ${cost_usd:.4f} USD (¥{cost_jpy:.2f} JPY) [レート: {current_usd_rate:.2f}]")
-                
-                # 統計に追加
-                self.stats['total_cost_usd'] += cost_usd
-                self.stats['total_cost_jpy'] += cost_jpy
+            try:
+                if hasattr(response, "usage") and response.usage:
+                    logger.info(f"使用トークン数: input={response.usage.input_tokens}, "
+                              f"output={response.usage.output_tokens}, "
+                              f"total={response.usage.input_tokens + response.usage.output_tokens}")
+                    
+                    # 費用計算
+                    cost_usd = calculate_api_cost(self.model_name, response.usage)
+                    current_usd_rate = config.get_current_usd_to_jpy_rate()
+                    cost_jpy = cost_usd * current_usd_rate
+                    logger.info(f"推定費用: ${cost_usd:.4f} USD (¥{cost_jpy:.2f} JPY) [レート: {current_usd_rate:.2f}]")
+                    
+                    # 統計に追加
+                    self.stats['total_cost_usd'] += cost_usd
+                    self.stats['total_cost_jpy'] += cost_jpy
+                else:
+                    logger.warning("API response does not contain usage information")
+            except Exception as e:
+                logger.error(f"Error processing usage information: {e}")
+                cost_usd = 0.0
             
             response_text = response.content[0].text.strip()
             
