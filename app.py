@@ -165,7 +165,7 @@ if uploaded_file is not None:
                         st.metric(
                             "API費用概算", 
                             f"¥{processing_info['cost_jpy']:.2f}",
-                            help=f"⚠️ 概算値です。実際の請求と異なる場合があります。\n\n計算値: ${processing_info['cost_usd']:.4f} USD\n処理ページ数: {processing_info.get('pages_processed', 0)}\n{rate_info}\nトークン使用量に基づく概算計算\n\n※ 為替レート変動や請求タイミングにより実際の費用と差が生じる可能性があります"
+                            help=f"⚠️ 概算値です。実際の請求と異なる場合があります。\n\n計算値: ${processing_info['cost_usd']:.4f} USD\n{rate_info}\nトークン使用量×API単価で計算\n\n※ 為替レート変動や請求タイミングにより実際の費用と差が生じる可能性があります"
                         )
                     else:
                         # フォールバック: モックデータまたは費用計算失敗時
