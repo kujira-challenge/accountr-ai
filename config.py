@@ -173,29 +173,58 @@ class Config:
     def get_current_usd_to_jpy_rate(cls) -> float:
         """
         リアルタイムUSD-JPY為替レートを取得
+        複数のAPIを試行してフォールバックを提供
         
         Returns:
             float: USD to JPY conversion rate
         """
-        try:
-            import requests
-            url = "https://api.exchangerate.host/latest?base=USD&symbols=JPY"
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            
-            if "rates" in data and "JPY" in data["rates"]:
-                rate = float(data["rates"]["JPY"])
-                logger = logging.getLogger(__name__)
-                logger.info(f"Current USD-JPY rate: {rate}")
-                return rate
-            else:
-                raise ValueError("Invalid response format")
+        import requests
+        logger = logging.getLogger(__name__)
+        
+        # API候補リスト（優先順位順）
+        apis = [
+            {
+                "url": "https://api.fxratesapi.com/latest?base=USD&currencies=JPY",
+                "path": ["rates", "JPY"]
+            },
+            {
+                "url": "https://api.exchangerate-api.com/v4/latest/USD",
+                "path": ["rates", "JPY"]
+            },
+            {
+                "url": "https://api.exchangerate.host/latest?base=USD&symbols=JPY",
+                "path": ["rates", "JPY"]
+            }
+        ]
+        
+        for i, api in enumerate(apis):
+            try:
+                response = requests.get(api["url"], timeout=8)
+                response.raise_for_status()
+                data = response.json()
                 
-        except Exception as e:
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Failed to get current USD-JPY rate: {e}. Using fallback rate: {cls.USD_TO_JPY_RATE}")
-            return cls.USD_TO_JPY_RATE
+                # パスに従ってデータを取得
+                current_data = data
+                for key in api["path"]:
+                    if key in current_data:
+                        current_data = current_data[key]
+                    else:
+                        raise ValueError(f"Key '{key}' not found in response")
+                
+                rate = float(current_data)
+                if 100 <= rate <= 200:  # 妥当な範囲チェック
+                    logger.info(f"Current USD-JPY rate: {rate} (from API #{i+1})")
+                    return rate
+                else:
+                    raise ValueError(f"Rate {rate} is outside reasonable range")
+                    
+            except Exception as e:
+                logger.debug(f"API #{i+1} failed: {e}")
+                continue
+        
+        # すべてのAPIが失敗した場合
+        logger.warning(f"All exchange rate APIs failed. Using fallback rate: {cls.USD_TO_JPY_RATE}")
+        return cls.USD_TO_JPY_RATE
 
     # ==================================================
     # CSV Field Definitions
