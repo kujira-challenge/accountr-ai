@@ -168,6 +168,34 @@ class Config:
     
     # USD to JPY conversion rate (approximate)
     USD_TO_JPY_RATE = float(os.getenv('USD_TO_JPY_RATE', '150'))
+    
+    @classmethod
+    def get_current_usd_to_jpy_rate(cls) -> float:
+        """
+        リアルタイムUSD-JPY為替レートを取得
+        
+        Returns:
+            float: USD to JPY conversion rate
+        """
+        try:
+            import requests
+            url = "https://api.exchangerate.host/latest?base=USD&symbols=JPY"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            if "rates" in data and "JPY" in data["rates"]:
+                rate = float(data["rates"]["JPY"])
+                logger = logging.getLogger(__name__)
+                logger.info(f"Current USD-JPY rate: {rate}")
+                return rate
+            else:
+                raise ValueError("Invalid response format")
+                
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to get current USD-JPY rate: {e}. Using fallback rate: {cls.USD_TO_JPY_RATE}")
+            return cls.USD_TO_JPY_RATE
 
     # ==================================================
     # CSV Field Definitions

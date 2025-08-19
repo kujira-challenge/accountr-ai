@@ -36,17 +36,20 @@ password = st.sidebar.text_input("パスワードを入力してください", t
 try:
     app_password = st.secrets.get("APP_PASSWORD")
     if not app_password:
-        app_password = "admin123"  # デフォルトパスワード（開発用）
-        st.sidebar.warning("⚠️ デフォルトパスワード使用中")
+        st.sidebar.error("❌ APP_PASSWORDが設定されていません")
+        st.error("🔐 システム管理者にお問い合わせください")
+        st.info("💡 Streamlit Secrets で APP_PASSWORD を設定する必要があります")
+        st.stop()
     
     if password != app_password:
         st.error("🚫 パスワードが正しくありません")
         st.info("💡 正しいパスワードを入力してアクセスしてください")
-        st.stop()  # ここで処理を止める
+        st.stop()
     else:
         st.sidebar.success("✅ 認証成功")
 except Exception as e:
-    st.sidebar.error(f"認証エラー: {str(e)}")
+    st.sidebar.error(f"❌ 認証システムエラー: {str(e)}")
+    st.error("🔐 システム管理者にお問い合わせください")
     st.stop()
 
 # サイドバー - システム情報
@@ -149,10 +152,17 @@ if uploaded_file is not None:
                 with col_result3:
                     # 実際のAPI費用表示（トークンベース）
                     if processing_info.get("cost_jpy", 0) > 0:
+                        # 最新レート情報を取得して表示
+                        try:
+                            current_rate = config.get_current_usd_to_jpy_rate()
+                            rate_info = f"為替レート: {current_rate:.2f} JPY/USD"
+                        except:
+                            rate_info = "為替レート: 取得失敗"
+                            
                         st.metric(
                             "実際のAPI費用", 
                             f"¥{processing_info['cost_jpy']:.2f}",
-                            help=f"実測値: ${processing_info['cost_usd']:.4f} USD\n処理ページ数: {processing_info.get('pages_processed', 0)}\nトークンベースの正確な計算"
+                            help=f"実測値: ${processing_info['cost_usd']:.4f} USD\n処理ページ数: {processing_info.get('pages_processed', 0)}\n{rate_info}\nトークンベースの正確な計算"
                         )
                     else:
                         # フォールバック: モックデータまたは費用計算失敗時

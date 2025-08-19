@@ -536,8 +536,9 @@ class ProductionPDFExtractor:
                 
                 # 費用計算
                 cost_usd = calculate_api_cost(self.model_name, response.usage)
-                cost_jpy = cost_usd * config.USD_TO_JPY_RATE
-                logger.info(f"推定費用: ${cost_usd:.4f} USD (¥{cost_jpy:.2f} JPY)")
+                current_usd_rate = config.get_current_usd_to_jpy_rate()
+                cost_jpy = cost_usd * current_usd_rate
+                logger.info(f"推定費用: ${cost_usd:.4f} USD (¥{cost_jpy:.2f} JPY) [レート: {current_usd_rate:.2f}]")
                 
                 # 統計に追加
                 self.stats['total_cost_usd'] += cost_usd
@@ -822,9 +823,10 @@ JSON配列のみで回答してください：
             
             logger.info(f"PDF processing completed: {pdf_path.name} - {len(all_extracted_data)} entries in {processing_time:.2f}s")
             
-            # 現在のファイル処理の費用計算
-            current_cost_usd = self.stats['total_cost_usd'] - (self.stats['total_cost_usd'] - sum([0]))  # この部分は簡易実装
-            current_cost_jpy = current_cost_usd * config.USD_TO_JPY_RATE
+            # 現在のファイル処理の費用計算（最新レート使用）
+            current_usd_rate = config.get_current_usd_to_jpy_rate()
+            # 統計の費用を最新レートで再計算
+            recalculated_cost_jpy = self.stats['total_cost_usd'] * current_usd_rate
             
             return ProcessingResult(
                 success=True,
@@ -833,7 +835,7 @@ JSON配列のみで回答してください：
                 processing_time=processing_time,
                 pages_processed=len(split_files) * pages_per_split,
                 total_cost_usd=self.stats['total_cost_usd'],
-                total_cost_jpy=self.stats['total_cost_jpy']
+                total_cost_jpy=recalculated_cost_jpy
             )
             
         except Exception as e:
