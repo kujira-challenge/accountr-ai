@@ -45,10 +45,15 @@ class Config:
     # ==================================================
     # File Name Settings
     # ==================================================
-    OUTPUT_CSV_NAME = os.getenv('OUTPUT_CSV_NAME', "extracted_journal_entries.csv")
+    OUTPUT_CSV_NAME = os.getenv('OUTPUT_CSV_NAME', "extracted_journal_entries_mjs45.csv")
     OUTPUT_CSV_PATH = OUTPUT_DIR / OUTPUT_CSV_NAME
     LOG_FILE_NAME = os.getenv('LOG_FILE_NAME', "pdf_extraction.log")
     LOG_FILE_PATH = LOG_DIR / LOG_FILE_NAME
+    
+    # ==================================================
+    # Account Code CSV Path
+    # ==================================================
+    ACCOUNT_CODE_CSV_PATH = os.getenv('ACCOUNT_CODE_CSV_PATH', BASE_DIR / "勘定科目コード一覧.csv")
     
     # ==================================================
     # API Configuration
@@ -227,19 +232,24 @@ class Config:
         return cls.USD_TO_JPY_RATE
 
     # ==================================================
-    # CSV Field Definitions
+    # MJS 45-Column CSV Headers (完全一致)
     # ==================================================
-    CSV_COLUMNS = [
-        "契約日",
-        "借方科目", 
-        "貸方科目",
-        "摘要",
-        "金額",
-        "備考",
-        "参照元ファイル"
+    MJS_45_COLUMNS = [
+        "伝票日付", "内部月", "伝票NO", "証憑NO", "データ種別", "仕訳入力形式",
+        "（借）科目ｺｰﾄﾞ", "（借）補助ｺｰﾄﾞ", "（借）部門ｺｰﾄﾞ", "（借）セグメントｺｰﾄﾞ",
+        "（借）消費税区分", "（借）業種", "（借）税込区分", "（借）補助区分1",
+        "（借）補助ｺｰﾄﾞ1", "（借）補助区分2", "（借）補助ｺｰﾄﾞ2",
+        "（貸）科目ｺｰﾄﾞ", "（貸）補助ｺｰﾄﾞ", "（貸）部門ｺｰﾄﾞ", "（貸）セグメントｺｰﾄﾞ",
+        "（貸）消費税区分", "（貸）業種", "（貸）税込区分", "（貸）補助区分1",
+        "（貸）補助ｺｰﾄﾞ1", "（貸）補助区分2", "（貸）補助ｺｰﾄﾞ2",
+        "金額", "消費税額", "消費税ｺｰﾄﾞ", "消費税率", "外税同時入力区分",
+        "資金繰入力区分", "資金繰ｺｰﾄﾞ", "摘要", "摘要コード1", "摘要コード2",
+        "摘要コード3", "摘要コード4", "摘要コード5", "期日", "付箋", "付箋コメント",
+        "事業者取引区分"
     ]
     
-    REQUIRED_FIELDS = ["契約日", "借方科目", "貸方科目", "摘要", "金額"]
+    # 5カラムJSONの必須フィールド
+    REQUIRED_JSON_FIELDS = ["伝票日付", "借貸区分", "科目名", "金額", "摘要"]
     
     # ==================================================
     # Target PDF File Patterns
@@ -406,7 +416,8 @@ MAX_TOKENS = config.ANTHROPIC_MAX_TOKENS
 MODEL_NAME = config.ANTHROPIC_MODEL
 LOG_LEVEL = config.LOG_LEVEL
 LOG_FORMAT = config.LOG_FORMAT
-CSV_COLUMNS = config.CSV_COLUMNS
+MJS_45_COLUMNS = config.MJS_45_COLUMNS
+ACCOUNT_CODE_CSV_PATH = config.ACCOUNT_CODE_CSV_PATH
 PDF_FILE_PATTERNS = config.PDF_FILE_PATTERNS
 
 def validate_config() -> bool:

@@ -181,7 +181,8 @@ if uploaded_file is not None:
                 # データプレビュー
                 if not df.empty:
                     st.divider()
-                    st.subheader("📋 抽出データプレビュー")
+                    st.subheader("📋 ミロク取込45列CSV プレビュー")
+                    st.info("🔄 抽出された5カラムJSON → ミロク取込45列CSV に変換済み（科目コード自動補完）")
                     
                     # 表示件数選択
                     display_count = st.selectbox(
@@ -207,14 +208,15 @@ if uploaded_file is not None:
                 st.divider()
                 col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
                 with col_dl2:
-                    download_filename = f"{Path(uploaded_file.name).stem}_extracted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                    download_filename = f"{Path(uploaded_file.name).stem}_mjs45_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
                     st.download_button(
-                        label="📥 CSVファイルをダウンロード",
+                        label="📥 ミロク取込45列CSV をダウンロード",
                         data=csv_bytes,
                         file_name=download_filename,
                         mime="text/csv",
                         use_container_width=True,
-                        type="secondary"
+                        type="secondary",
+                        help="ミロク会計システムに直接取り込み可能な45列形式のCSVファイル"
                     )
                 
             except Exception as e:

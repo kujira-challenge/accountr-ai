@@ -6,6 +6,7 @@ PDFをアップロードしてCSV形式で仕訳データを出力する
 """
 
 import io
+import json
 import tempfile
 from pathlib import Path
 from typing import Tuple, Dict, Any
@@ -14,6 +15,7 @@ import logging
 
 # ローカルモジュール
 from pdf_extractor import ProductionPDFExtractor
+from mjs_converter import fivejson_to_mjs45, MJSConverter
 from config import config
 
 # ログ設定
@@ -61,24 +63,39 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
             
             logger.info(f"Successfully processed PDF: {len(result.data)} entries extracted")
             
-            # DataFrameに変換
+            # 5カラムJSON→45列MJS CSV変換
             if result.data:
-                df = pd.DataFrame(result.data)
+                # 1. 5カラムJSONを一時保存
+                json_path = temp_path / f"{uploaded_file.name}_extracted.json"
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(result.data, f, ensure_ascii=False, indent=2)
                 
-                # CSV列の順序を整える
-                if hasattr(config, 'CSV_COLUMNS'):
-                    # 設定された列順序を使用
-                    missing_cols = [col for col in config.CSV_COLUMNS if col not in df.columns]
-                    for col in missing_cols:
-                        df[col] = ""
-                    df = df[config.CSV_COLUMNS]
+                logger.info(f"5-column JSON saved: {json_path}")
+                
+                # 2. 45列CSVに変換
+                mjs_csv_path = temp_path / f"{uploaded_file.name}_mjs45.csv"
+                conversion_log_path = temp_path / "mjs_conversion.log"
+                
+                try:
+                    fivejson_to_mjs45(
+                        str(json_path),
+                        config.ACCOUNT_CODE_CSV_PATH,
+                        str(mjs_csv_path),
+                        str(conversion_log_path)
+                    )
+                    
+                    # 3. 45列CSVを読み込んでDataFrameに変換
+                    df = pd.read_csv(mjs_csv_path, encoding='utf-8-sig')
+                    logger.info(f"MJS 45-column CSV loaded: {len(df)} rows")
+                    
+                except Exception as e:
+                    logger.error(f"MJS conversion failed: {e}")
+                    # フォールバック: 空の45列DataFrame
+                    df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
                 
             else:
-                # 空のデータフレームを作成
-                columns = getattr(config, 'CSV_COLUMNS', [
-                    "契約日", "借方科目", "貸方科目", "摘要", "金額", "備考", "参照元ファイル", "ページ"
-                ])
-                df = pd.DataFrame(columns=columns)
+                # 空の45列DataFrame作成
+                df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
             
             # CSV bytes形式で出力
             csv_buffer = io.StringIO()
@@ -100,10 +117,8 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
             
     except Exception as e:
         logger.error(f"PDF processing error: {e}", exc_info=True)
-        # エラー時も3つの戻り値を返す
-        empty_df = pd.DataFrame(columns=getattr(config, 'CSV_COLUMNS', [
-            "契約日", "借方科目", "貸方科目", "摘要", "金額", "備考", "参照元ファイル", "ページ"
-        ]))
+        # エラー時も3つの戻り値を返す - 45列空DataFrame
+        empty_df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
         csv_buffer = io.StringIO()
         empty_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
         empty_csv_bytes = csv_buffer.getvalue().encode('utf-8-sig')

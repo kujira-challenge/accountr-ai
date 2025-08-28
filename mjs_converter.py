@@ -58,9 +58,14 @@ class MJSConverter:
     def load_account_codes(self, account_code_csv_path: str) -> None:
         """勘定科目コード一覧CSVを読み込み"""
         try:
-            # Shift-JIS エンコーディングで読み込み
-            df = pd.read_csv(account_code_csv_path, encoding='shift_jis')
-            logger.info(f"Account code CSV loaded: {len(df)} records")
+            # Shift-JIS → UTF-8-sig フォールバック読み込み
+            try:
+                df = pd.read_csv(account_code_csv_path, encoding='shift_jis')
+                logger.info(f"Account code CSV loaded (shift_jis): {len(df)} records")
+            except UnicodeDecodeError:
+                logger.warning("Shift-JIS decode failed, trying UTF-8-sig...")
+                df = pd.read_csv(account_code_csv_path, encoding='utf-8-sig')
+                logger.info(f"Account code CSV loaded (utf-8-sig): {len(df)} records")
             
             # カラム名の候補を定義（半角カタカナ含む）
             code_candidates = ["科目ｺｰﾄﾞ", "科目コード", "勘定科目コード", "コード"]

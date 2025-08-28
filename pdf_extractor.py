@@ -644,10 +644,10 @@ class ProductionPDFExtractor:
                     logger.warning(f"Entry {i} is not a dictionary, skipping")
                     continue
                 
-                # Validate required fields exist
-                missing_fields = [field for field in config.CSV_COLUMNS if field not in entry]
+                # Validate required fields exist (5カラムJSON)
+                missing_fields = [field for field in config.REQUIRED_JSON_FIELDS if field not in entry]
                 for field in missing_fields:
-                    entry[field] = ""
+                    entry[field] = "" if field != "金額" else 0
                 
                 # Validate amount field
                 if config.VALIDATE_AMOUNTS and entry.get("金額"):
@@ -658,9 +658,7 @@ class ProductionPDFExtractor:
                     except (ValueError, TypeError):
                         logger.warning(f"Invalid amount format in entry {i}: {entry.get('金額')}")
                 
-                # Ensure reference fields are set
-                entry["参照元ファイル"] = filename
-                entry["ページ"] = page_range
+                # 5カラムJSONには参照元ファイル/ページは含まない（MJS変換で付与）
                 
                 validated_data.append(entry)
                 
@@ -715,74 +713,7 @@ class ProductionPDFExtractor:
     
     def _get_enhanced_prompt_template(self) -> str:
         """Get enhanced prompt template with better instructions"""
-        return """
-あなたは帳票OCRの変換器です。与えられた画像（PDFページ）から仕訳情報を抽出し、次の5カラムのみを使ってJSON配列で出力してください。
-出力以外のテキスト（説明・コード・表）は一切出力しないこと。
-
-出力カラム
-伝票日付：YYYY/M/D に正規化（和暦→西暦）
-借貸区分："借方" or "貸方"
-科目名：科目/口座の名称（不明は空文字）
-金額：半角数値・カンマ無し・正の数
-摘要：取引要約＋固有情報を必ず含める（物件名・号室・契約者名・オーナー名・○月分賃料 等）
-
-新規追加：共通摘要の継承（最重要）
-同一の表枠（1明細ブロック）内で中央の「摘要/適用」欄に記載された固有情報は、借方・貸方のすべてのレッグに共通情報として完全にコピーして入れること。
-共通として継承する代表例：
-物件名 / 号室 / 契約者名 / オーナー名 / ○月分賃料 / 伝票の種別（退居振替・保証料・家賃 等）
-各レッグ固有の違い（科目名や"借方/貸方"の別）は摘要末尾にだけ短く追記：
-借方レッグ：…; 借方: {{科目名}}
-貸方レッグ：…; 貸方: {{科目名}}
-
-同一ページに複数枠がある場合は枠単位で共通摘要を判定して継承する。
-もし枠内で記載が欠落している行があっても、他行に書かれている共通情報で補完する。
-値が食い違う場合は、多数決または情報量が多い方を共通とし、不確実なら摘要末尾に 【OCR注意: 目視確認推奨】 を付ける。
-
-そのほかのルール（従来どおり）
-複合仕訳：1レッグ=1要素（借2＋貸1なら3要素）
-正規化：NFKC、数字は半角、金額から記号除去
-不一致の疑い（借方合計≠貸方合計 等）や判読不確実：摘要末尾に 【OCR注意: 目視確認推奨】
-データ未検出時：{{"伝票日付":"", "借貸区分":"", "科目名":"", "金額":0, "摘要":"抽出不能【OCR注意: 目視確認推奨】"}} の1要素のみ
-
-Few-shot（共通摘要の継承・2/12の例）
-入力の要点（ページ内1枠）
-共通摘要：退居振替; オーナー: 飯島えり子; 物件名: ルベール武蔵関; 号室: 101; 契約者名: 所 厚作
-借方：預り敷金 49,000／三菱普通 33,500
-貸方：退居営繕費売上 82,500
-
-望ましい出力（共通摘要を全レッグに揃える）
-[
-  {{
-    "伝票日付":"2025/2/12",
-    "借貸区分":"借方",
-    "科目名":"預り敷金",
-    "金額":49000,
-    "摘要":"退居振替; オーナー: 飯島えり子; 物件名: ルベール武蔵関; 号室: 101; 契約者名: 所 厚作; 借方: 預り敷金"
-  }},
-  {{
-    "伝票日付":"2025/2/12",
-    "借貸区分":"借方",
-    "科目名":"三菱普通",
-    "金額":33500,
-    "摘要":"退居振替; オーナー: 飯島えり子; 物件名: ルベール武蔵関; 号室: 101; 契約者名: 所 厚作; 借方: 三菱普通"
-  }},
-  {{
-    "伝票日付":"2025/2/12",
-    "借貸区分":"貸方",
-    "科目名":"退居営繕費売上",
-    "金額":82500,
-    "摘要":"退居振替; オーナー: 飯島えり子; 物件名: ルベール武蔵関; 号室: 101; 契約者名: 所 厚作; 貸方: 退居営繕費売上"
-  }}
-]
-
-■ 厳格な要件
-- 回答は必ずJSON配列で開始し、JSON配列で終了すること
-- JSON以外のテキスト（説明、コメント）は一切含めないこと
-- 金額は必ず数値型（文字列ではない）
-- 配列には最低1つの要素が必要
-
-JSON配列のみで回答してください：
-        """
+        return """あなたは帳票OCRの変換器です。与えられた画像（PDFページ）から仕訳情報を抽出し、次の5カラムのみを使ってJSON配列で出力してください。 出力以外のテキスト（説明・コード・表）は一切出力しないこと。 出力カラム（変更なし） 伝票日付：YYYY/M/D に正規化（和暦→西暦） 借貸区分："借方" or "貸方" 科目名：科目/口座の名称（不明は空文字） 金額：半角数値・カンマ無し・正の数 摘要：取引要約＋固有情報を必ず含める（物件名・号室・契約者名・オーナー名・○月分賃料 等） 新規追加：共通摘要の継承（最重要） 同一の表枠（1明細ブロック）内で中央の「摘要/適用」欄に記載された固有情報は、借方・貸方のすべてのレッグに共通情報として完全にコピー**して入れること。 共通として継承する代表例： 物件名 / 号室 / 契約者名 / オーナー名 / ○月分賃料 / 伝票の種別（退居振替・保証料・家賃 等） 各レッグ固有の違い（科目名や"借方/貸方"の別）は摘要末尾にだけ短く追記： 借方レッグ：…; 借方: {科目名} 貸方レッグ：…; 貸方: {科目名} 同一ページに複数枠がある場合は枠単位で共通摘要を判定して継承する。 もし枠内で記載が欠落している行があっても、他行に書かれている共通情報で補完する。 値が食い違う場合は、多数決または情報量が多い方を共通とし、不確実なら摘要末尾に 【OCR注意: 目視確認推奨】 を付ける。 そのほかのルール（従来どおり） 複合仕訳：1レッグ=1要素（借2＋貸1なら3要素） 正規化：NFKC、数字は半角、金額から記号除去 不一致の疑い（借方合計≠貸方合計 等）や判読不確実：摘要末尾に 【OCR注意: 目視確認推奨】 データ未検出時：{"伝票日付":"", "借貸区分":"", "科目名":"", "金額":0, "摘要":"抽出不能【OCR注意: 目視確認推奨】"} の1要素のみ Few-shot（共通摘要の継承・2/12の例） 入力の要点（ページ内1枠） 共通摘要：退居振替; オーナー: 飯島えり子; 物件名: ルベール武蔵関; 号室: 101; 契約者名: 所 厚作 借方：預り敷金 49,000／三菱普通 33,500 貸方：退居営繕費売上 82,500 望ましい出力（共通摘要を全レッグに揃える） [ { "伝票日付":"2025/2/12", "借貸区分":"借方", "科目名":"預り敷金", "金額":49000, "摘要":"退居振替; オーナー: 飯島えり子; 物件名: ルベール武蔵関; 号室: 101; 契約者名: 所 厚作; 借方: 預り敷金" }, { "伝票日付":"2025/2/12", "借貸区分":"借方", "科目名":"三菱普通", "金額":33500, "摘要":"退居振替; オーナー: 飯島えり子; 物件名: ルベール武蔵関; 号室: 101; 契約者名: 所 厚作; 借方: 三菱普通" }, { "伝票日付":"2025/2/12", "借貸区分":"貸方", "科目名":"退居営繕費売上", "金額":82500, "摘要":"退居振替; オーナー: 飯島えり子; 物件名: ルベール武蔵関; 号室: 101; 契約者名: 所 厚作; 貸方: 退居営繕費売上" } ]"""
     
     def process_single_pdf(self, pdf_path: Path, temp_dir: Path, pages_per_split: Optional[int] = None) -> ProcessingResult:
         """
@@ -1090,18 +1021,15 @@ JSON配列のみで回答してください：
         """Save data to CSV with enhanced error handling"""
         if not data:
             logger.warning("No data to save")
-            # Create empty CSV with headers
-            df = pd.DataFrame(columns=config.CSV_COLUMNS)
+            # Create empty CSV with 5-column headers (for internal use only)
+            df = pd.DataFrame(columns=config.REQUIRED_JSON_FIELDS)
         else:
             df = pd.DataFrame(data)
             
-            # Ensure all required columns exist
-            for col in config.CSV_COLUMNS:
+            # Ensure all required 5-column fields exist
+            for col in config.REQUIRED_JSON_FIELDS:
                 if col not in df.columns:
-                    df[col] = ""
-            
-            # Reorder columns
-            df = df[config.CSV_COLUMNS]
+                    df[col] = "" if col != "金額" else 0
         
         try:
             # Save with BOM for Excel compatibility
