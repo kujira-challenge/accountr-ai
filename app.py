@@ -128,29 +128,34 @@ if uploaded_file is not None:
     # 概算コスト表示
     st.info(f"📊 **概算**: {estimated_pages}ページ予想 / 概算費用: ¥{estimate_cost_jpy:.0f} (${estimate_cost_usd:.3f} USD)")
     
+    # キャッシュクリアオプション
+    if is_cached and cached_result:
+        st.warning("⚠️ このファイルは既に処理済みです。再処理する場合は下のボタンをクリックしてください。")
+        col_clear1, col_clear2, col_clear3 = st.columns([1, 2, 1])
+        with col_clear2:
+            if st.button("🗑️ キャッシュをクリアして再処理", type="secondary", use_container_width=True):
+                if file_hash in st.session_state.processing_cache:
+                    del st.session_state.processing_cache[file_hash]
+                st.rerun()
+    
     # 変換ボタン
     st.divider()
     col_button1, col_button2, col_button3 = st.columns([1, 2, 1])
     
     with col_button2:
-        # 既にキャッシュがある場合はボタンを無効化
-        button_disabled = is_cached and cached_result is not None
-        button_text = "✅ 抽出済み（結果を表示中）" if button_disabled else "🚀 仕訳データ抽出開始"
-        
         convert_clicked = st.button(
-            button_text,
-            type="primary" if not button_disabled else "secondary",
+            "🚀 仕訳データ抽出開始",
+            type="primary",
             use_container_width=True,
-            disabled=button_disabled,
-            help="Claude Sonnet 4.0を使用してPDFから仕訳データを抽出します" if not button_disabled else "このファイルは既に処理済みです"
+            help="Claude Sonnet 4.0を使用してPDFから仕訳データを抽出します"
         )
     
-    # 処理実行（キャッシュがある場合は結果を直接表示）
-    if convert_clicked or (is_cached and cached_result):
+    # 処理実行
+    if convert_clicked:
         if is_cached and cached_result:
             # キャッシュから結果を取得
             df, csv_bytes, processing_info = cached_result
-            st.info("💾 キャッシュから結果を表示しています（二重処理防止）")
+            st.info("💾 キャッシュから結果を取得しています（同一ファイル再処理防止）")
         else:
             # 新規処理
             with st.spinner("🔄 Claude Sonnet 4.0で仕訳データを抽出中..."):
@@ -292,6 +297,46 @@ if uploaded_file is not None:
         if config.DEBUG_MODE and 'processing_info' in locals() and processing_info.get("error"):
             with st.expander("🔍 エラー詳細（デバッグ情報）"):
                 st.code(processing_info["error"])
+    
+    # キャッシュされた結果がある場合は表示（ボタンクリックなしでも）
+    elif is_cached and cached_result:
+        df, csv_bytes, processing_info = cached_result
+        st.success("✅ 処理済みファイル - 結果を表示中")
+        
+        # 結果サマリー表示
+        col_result1, col_result2, col_result3 = st.columns(3)
+        with col_result1:
+            st.metric("抽出エントリ数", len(df))
+        with col_result2:
+            st.metric("処理時間", f"{processing_info.get('processing_time', 0):.1f}秒")
+        with col_result3:
+            if processing_info.get("cost_jpy", 0) > 0:
+                st.metric("API費用概算", f"¥{processing_info['cost_jpy']:.2f}")
+        
+        # データプレビュー
+        if not df.empty:
+            st.divider()
+            st.subheader("📋 ミロク取込45列CSV プレビュー")
+            display_count = st.selectbox("表示件数を選択", [10, 25, 50, 100, len(df)], index=1)
+            st.dataframe(df.head(display_count), use_container_width=True, hide_index=True)
+            if len(df) > display_count:
+                st.info(f"表示: {display_count}件 / 全{len(df)}件")
+        
+        # ダウンロードボタン
+        if len(df) > 0:
+            st.divider()
+            col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
+            with col_dl2:
+                download_filename = f"{Path(uploaded_file.name).stem}_mjs45_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                st.download_button(
+                    label="📥 ミロク取込45列CSV をダウンロード",
+                    data=csv_bytes,
+                    file_name=download_filename,
+                    mime="text/csv",
+                    use_container_width=True,
+                    type="secondary",
+                    help="ミロク会計システムに直接取り込み可能な45列形式のCSVファイル"
+                )
 
 # 使用方法とヒント
 st.divider()
