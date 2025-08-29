@@ -171,12 +171,22 @@ if uploaded_file is not None:
                     st.session_state.processing_cache[file_hash] = (df, csv_bytes, processing_info)
                     st.session_state.last_processed_hash = file_hash
                     st.session_state.last_result = (df, csv_bytes, processing_info)
-                
-                progress_bar.progress(75)
-                status_text.text("✅ 仕訳データ抽出完了！")
-                progress_bar.progress(100)
-                
-                processing_time = (datetime.now() - start_time).total_seconds()
+                    
+                    progress_bar.progress(75)
+                    status_text.text("✅ 仕訳データ抽出完了！")
+                    progress_bar.progress(100)
+                    
+                    processing_time = (datetime.now() - start_time).total_seconds()
+                    
+                except Exception as e:
+                    st.error(f"💥 変換に失敗しました: {str(e)}")
+                    logger.error(f"PDF processing error: {e}", exc_info=True)
+                    
+                    # エラー時のフォールバック処理
+                    df = pd.DataFrame()  # 空のDataFrame
+                    csv_bytes = b""
+                    processing_info = {"cost_usd": 0.0, "cost_jpy": 0.0, "error": str(e)}
+                    processing_time = 0.0
                 
                 # 結果表示（エラー情報がある場合は警告表示）
                 if processing_info.get("error"):
@@ -278,23 +288,10 @@ if uploaded_file is not None:
                             help="ミロク会計システムに直接取り込み可能な45列形式のCSVファイル"
                         )
                 
-            except Exception as e:
-                st.error(f"💥 変換に失敗しました: {str(e)}")
-                logger.error(f"PDF processing error: {e}", exc_info=True)
-                
-                # エラー時でも処理情報を初期化
-                processing_info = {
-                    "cost_usd": 0.0,
-                    "cost_jpy": 0.0,
-                    "processing_time": 0.0,
-                    "pages_processed": 0,
-                    "entries_extracted": 0
-                }
-                
-                # エラー詳細（デバッグモード時）
-                if config.DEBUG_MODE:
-                    with st.expander("🔍 エラー詳細（デバッグ情報）"):
-                        st.code(str(e))
+        # エラー詳細（デバッグモード時）
+        if config.DEBUG_MODE and 'processing_info' in locals() and processing_info.get("error"):
+            with st.expander("🔍 エラー詳細（デバッグ情報）"):
+                st.code(processing_info["error"])
 
 # 使用方法とヒント
 st.divider()
