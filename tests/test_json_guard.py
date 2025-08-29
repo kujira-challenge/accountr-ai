@@ -107,6 +107,70 @@ class TestJsonGuard(unittest.TestCase):
         text = "前置き [{'test': 'value'}] 後置き"
         result = extract_json_array_str(text)
         self.assertEqual(result, "[{'test': 'value'}]")
+    
+    def test_bracket_completion_missing_end(self):
+        """角括弧補完テスト：終了角括弧不足"""
+        text = '[{"伝票日付":"2025/2/10","借貸区分":"借方","科目名":"現金","金額":1000,"摘要":"テスト"}'
+        result = extract_json_array_str(text)
+        # 終了角括弧が補完されること
+        self.assertTrue(result.endswith(']'))
+        # パースできること
+        data = json.loads(result)
+        self.assertEqual(len(data), 1)
+    
+    def test_bracket_completion_missing_start(self):
+        """角括弧補完テスト：開始角括弧不足"""
+        text = '{"伝票日付":"2025/2/10","借貸区分":"借方","科目名":"現金","金額":1000,"摘要":"テスト"}]'
+        result = extract_json_array_str(text)
+        # 開始角括弧が補完されること
+        self.assertTrue(result.startswith('['))
+        # パースできること
+        data = json.loads(result)
+        self.assertEqual(len(data), 1)
+    
+    def test_various_code_fences(self):
+        """様々なコードフェンス形式のテスト"""
+        test_cases = [
+            '```JSON\n[{"test": "value"}]\n```',
+            '~~~json\n[{"test": "value"}]\n~~~',
+            '```json\n[{"test": "value"}]\n```',
+        ]
+        
+        for text in test_cases:
+            with self.subTest(text=text):
+                result = extract_json_array_str(text)
+                self.assertEqual(result, '[{"test": "value"}]')
+    
+    def test_robust_json_extraction(self):
+        """頑健なJSON抽出テスト（実LLM出力模擬）"""
+        # 実際のLLM出力によくある形式
+        text = '''
+        以下が抽出結果です：
+        
+        [
+            {
+                "伝票日付": "2025/2/10",
+                "借貸区分": "借方", 
+                "科目名": "現金",
+                "金額": 1000,
+                "摘要": "テスト取引; 借方:現金"
+            },
+            {
+                "伝票日付": "2025/2/10",
+                "借貸区分": "貸方",
+                "科目名": "売上高", 
+                "金額": 1000,
+                "摘要": "テスト取引; 貸方:売上高"
+            }
+        ]
+        
+        以上が結果です。
+        '''
+        
+        result = parse_5cols_json(text)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["科目名"], "現金")
+        self.assertEqual(result[1]["借貸区分"], "貸方")
 
 class TestIntegrationWithMock(unittest.TestCase):
     """LLM呼び出しをモックした統合テスト"""

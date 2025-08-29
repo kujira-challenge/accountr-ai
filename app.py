@@ -14,6 +14,7 @@ from pathlib import Path
 # ローカルモジュール
 from backend_processor import process_pdf_to_csv
 from config import config
+import hashlib
 
 # ページ設定
 st.set_page_config(
@@ -74,6 +75,14 @@ with st.sidebar:
     st.divider()
     st.caption("Powered by Claude Sonnet 4.0")
 
+# セッションステート初期化（二重起動防止用）
+if 'processing_cache' not in st.session_state:
+    st.session_state.processing_cache = {}
+if 'last_processed_hash' not in st.session_state:
+    st.session_state.last_processed_hash = None
+if 'last_result' not in st.session_state:
+    st.session_state.last_result = None
+
 # メインコンテンツ
 st.title("📊 PDF仕訳抽出システム")
 st.markdown("### 📄 PDFファイルから会計仕訳データを自動抽出してCSVで出力")
@@ -85,7 +94,7 @@ with col1:
     uploaded_file = st.file_uploader(
         "📁 PDFファイルを選択してください",
         type=["pdf"],
-        help="5ページずつ分割処理されます。大きなファイルは時間がかかる場合があります。"
+        help="ページごとに分割処理されます（画像1枚=1リクエスト）。大きなファイルは時間がかかる場合があります。"
     )
 
 with col2:
@@ -102,33 +111,66 @@ if not config.ANTHROPIC_API_KEY or config.ANTHROPIC_API_KEY == 'DUMMY_API_KEY':
 # 変換処理
 if uploaded_file is not None:
     
+    # ファイルハッシュ計算（二重起動防止用）
+    file_content = uploaded_file.read()
+    file_hash = hashlib.md5(file_content).hexdigest()
+    uploaded_file.seek(0)  # ファイルポインタリセット
+    
+    # キャッシュチェック
+    is_cached = file_hash in st.session_state.processing_cache
+    cached_result = st.session_state.processing_cache.get(file_hash)
+    
+    # 概算費用計算（ファイルサイズ×係数）
+    estimated_pages = max(1, int(uploaded_file.size / (1024 * 300)))  # 300KB/ページ仮定
+    estimate_cost_usd = estimated_pages * 0.01  # 1ページあたり$0.01概算
+    estimate_cost_jpy = estimate_cost_usd * config.get_current_usd_to_jpy_rate()
+    
+    # 概算コスト表示
+    st.info(f"📊 **概算**: {estimated_pages}ページ予想 / 概算費用: ¥{estimate_cost_jpy:.0f} (${estimate_cost_usd:.3f} USD)")
+    
     # 変換ボタン
     st.divider()
     col_button1, col_button2, col_button3 = st.columns([1, 2, 1])
     
     with col_button2:
+        # 既にキャッシュがある場合はボタンを無効化
+        button_disabled = is_cached and cached_result is not None
+        button_text = "✅ 抽出済み（結果を表示中）" if button_disabled else "🚀 仕訳データ抽出開始"
+        
         convert_clicked = st.button(
-            "🚀 仕訳データ抽出開始", 
-            type="primary",
+            button_text,
+            type="primary" if not button_disabled else "secondary",
             use_container_width=True,
-            help="Claude Sonnet 4.0を使用してPDFから仕訳データを抽出します"
+            disabled=button_disabled,
+            help="Claude Sonnet 4.0を使用してPDFから仕訳データを抽出します" if not button_disabled else "このファイルは既に処理済みです"
         )
     
-    # 処理実行
-    if convert_clicked:
-        with st.spinner("🔄 Claude Sonnet 4.0で仕訳データを抽出中..."):
-            try:
-                start_time = datetime.now()
-                
-                # プログレスバー表示
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                status_text.text("📄 PDFファイルを分析中...")
-                progress_bar.progress(25)
-                
-                # メイン処理
-                df, csv_bytes, processing_info = process_pdf_to_csv(uploaded_file)
+    # 処理実行（キャッシュがある場合は結果を直接表示）
+    if convert_clicked or (is_cached and cached_result):
+        if is_cached and cached_result:
+            # キャッシュから結果を取得
+            df, csv_bytes, processing_info = cached_result
+            st.info("💾 キャッシュから結果を表示しています（二重処理防止）")
+        else:
+            # 新規処理
+            with st.spinner("🔄 Claude Sonnet 4.0で仕訳データを抽出中..."):
+                try:
+                    start_time = datetime.now()
+                    
+                    # プログレスバー表示
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    status_text.text("📄 PDFファイルを分析中...")
+                    progress_bar.progress(25)
+                    
+                    # メイン処理
+                    df, csv_bytes, processing_info = process_pdf_to_csv(uploaded_file)
+                    
+                    # 結果をキャッシュに保存
+                    st.session_state.processing_cache[file_hash] = (df, csv_bytes, processing_info)
+                    st.session_state.last_processed_hash = file_hash
+                    st.session_state.last_result = (df, csv_bytes, processing_info)
                 
                 progress_bar.progress(75)
                 status_text.text("✅ 仕訳データ抽出完了！")
@@ -204,20 +246,37 @@ if uploaded_file is not None:
                 else:
                     st.warning("⚠️ 抽出結果が空でした。PDFの内容をご確認ください。")
                 
-                # ダウンロードボタン
+                # 抽出状況チェックとダウンロードボタン
                 st.divider()
-                col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
-                with col_dl2:
-                    download_filename = f"{Path(uploaded_file.name).stem}_mjs45_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-                    st.download_button(
-                        label="📥 ミロク取込45列CSV をダウンロード",
-                        data=csv_bytes,
-                        file_name=download_filename,
-                        mime="text/csv",
-                        use_container_width=True,
-                        type="secondary",
-                        help="ミロク会計システムに直接取り込み可能な45列形式のCSVファイル"
-                    )
+                entries_extracted = len(df)
+                
+                if entries_extracted == 0:
+                    st.warning("⚠️ **抽出が未実行です**。『🚀 仕訳データ抽出開始』を押してください")
+                    st.info("📝 CSVダウンロードは抽出完了後に有効になります")
+                    
+                    # 無効化されたダウンロードボタン
+                    col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
+                    with col_dl2:
+                        st.button(
+                            "📥 45列CSVをダウンロード (無効)",
+                            disabled=True,
+                            use_container_width=True,
+                            help="抽出完了後に有効になります"
+                        )
+                else:
+                    # 有効なダウンロードボタン
+                    col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
+                    with col_dl2:
+                        download_filename = f"{Path(uploaded_file.name).stem}_mjs45_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                        st.download_button(
+                            label="📥 ミロク取込45列CSV をダウンロード",
+                            data=csv_bytes,
+                            file_name=download_filename,
+                            mime="text/csv",
+                            use_container_width=True,
+                            type="secondary",
+                            help="ミロク会計システムに直接取り込み可能な45列形式のCSVファイル"
+                        )
                 
             except Exception as e:
                 st.error(f"💥 変換に失敗しました: {str(e)}")

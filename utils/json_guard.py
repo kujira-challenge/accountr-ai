@@ -16,7 +16,7 @@ REQUIRED_5_COLUMNS = ["伝票日付", "借貸区分", "科目名", "金額", "�
 
 def extract_json_array_str(text: str) -> str:
     """
-    テキストから最初のJSON配列文字列を抽出
+    テキストから最初のJSON配列文字列を抽出（角括弧補完機能付き）
     
     Args:
         text: LLMの生レスポンステキスト
@@ -29,13 +29,19 @@ def extract_json_array_str(text: str) -> str:
     """
     text = text.strip()
     
-    # コードブロックマーカーを除去
-    if "```json" in text:
-        start = text.find("```json") + 7
-        end = text.find("```", start)
-        if end != -1:
-            text = text[start:end].strip()
-    elif "```" in text:
+    # コードブロックマーカーを除去（```json、```JSON、~~~対応）
+    marker_found = False
+    for marker in ["```json", "```JSON", "~~~json", "~~~JSON"]:
+        if marker in text:
+            start = text.find(marker) + len(marker)
+            end_marker = "```" if marker.startswith("```") else "~~~"
+            end = text.find(end_marker, start)
+            if end != -1:
+                text = text[start:end].strip()
+                marker_found = True
+                break
+    
+    if not marker_found and "```" in text:
         start = text.find("```") + 3
         end = text.rfind("```")
         if end != -1 and end > start:
@@ -45,14 +51,38 @@ def extract_json_array_str(text: str) -> str:
     pattern = r'\[(?:[^[\]]*(?:\[[^\]]*\])*)*[^[\]]*\]'
     matches = re.findall(pattern, text, re.DOTALL)
     
-    if not matches:
-        raise ValueError("JSON配列パターンが見つかりません")
+    if matches:
+        json_str = matches[0].strip()
+        logger.debug(f"JSON配列文字列を抽出: {len(json_str)}文字")
+        return json_str
     
-    # 最初のマッチを返す
-    json_str = matches[0].strip()
-    logger.debug(f"JSON配列文字列を抽出: {len(json_str)}文字")
+    # 角括弧補完を試行（1個だけ不足の場合）
+    logger.debug("正規JSON配列が見つからないため、角括弧補完を試行")
     
-    return json_str
+    # 開始角括弧がある場合、終了角括弧を補完
+    if '[' in text and text.count('[') > text.count(']'):
+        # 最後の ']' を見つけて、その後に ']' を追加
+        last_brace = text.rfind('}')
+        if last_brace != -1:
+            potential_json = text[:last_brace + 1] + ']'
+            # パターンマッチング再実行
+            matches = re.findall(pattern, potential_json, re.DOTALL)
+            if matches:
+                logger.info("角括弧補完成功: 終了角括弧を追加")
+                return matches[0].strip()
+    
+    # 終了角括弧があるが開始角括弧がない場合
+    if ']' in text and text.count(']') > text.count('['):
+        # 最初の '{' の前に '[' を追加
+        first_brace = text.find('{')
+        if first_brace != -1:
+            potential_json = '[' + text
+            matches = re.findall(pattern, potential_json, re.DOTALL)
+            if matches:
+                logger.info("角括弧補完成功: 開始角括弧を追加")
+                return matches[0].strip()
+    
+    raise ValueError("JSON配列パターンが見つかりません（角括弧補完も失敗）")
 
 def parse_5cols_json(text: str) -> List[Dict]:
     """
@@ -107,11 +137,20 @@ def parse_5cols_json(text: str) -> List[Dict]:
             validated_data.append(entry)
         
         logger.info(f"5カラムJSONパース成功: {len(validated_data)}エントリ")
+        
+        # デバッグ用：LLM生応答の冒頭末尾を保存（最大8KB）
+        sanitized_text = text[:8000] if len(text) > 8000 else text
+        logger.debug(f"LLM生応答（冒頭～末尾8KB）: {sanitized_text}")
+        
         return validated_data
         
     except json.JSONDecodeError as e:
+        logger.error(f"JSON抽出失敗 - 原因: JSONパース失敗 - {e}")
+        logger.debug(f"パース失敗テキスト（先頭500文字）: {text[:500]}...")
         raise ValueError(f"JSONパースエラー: {e}")
     except Exception as e:
+        logger.error(f"JSON抽出失敗 - 原因: その他エラー - {type(e).__name__}: {e}")
+        logger.debug(f"エラー発生テキスト（先頭500文字）: {text[:500]}...")
         raise ValueError(f"5カラムJSON抽出エラー: {e}")
 
 def get_fallback_entry(error_msg: str = "抽出不能") -> List[Dict]:

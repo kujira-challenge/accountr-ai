@@ -97,9 +97,9 @@ class Config:
     DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
     
     # PDF Processing
-    PAGES_PER_SPLIT = int(os.getenv('PAGES_PER_SPLIT', '5'))
+    PAGES_PER_SPLIT = int(os.getenv('PAGES_PER_SPLIT', '1'))  # ページ単位投入（画像1枚=1リクエスト）
     MAX_FILE_SIZE_MB = int(os.getenv('MAX_FILE_SIZE_MB', '50'))
-    PDF_DPI = int(os.getenv('PDF_DPI', '300'))
+    PDF_DPI = int(os.getenv('PDF_DPI', '200'))  # 150-200DPI推奨、過度な圧縮回避
     
     # API Rate Limiting
     API_REQUEST_INTERVAL = float(os.getenv('API_REQUEST_INTERVAL', '2'))
@@ -204,7 +204,7 @@ class Config:
         
         for i, api in enumerate(apis):
             try:
-                response = requests.get(api["url"], timeout=8)
+                response = requests.get(api["url"], timeout=3)
                 response.raise_for_status()
                 data = response.json()
                 
