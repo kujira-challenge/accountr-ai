@@ -14,7 +14,6 @@ from pathlib import Path
 # ローカルモジュール
 from backend_processor import process_pdf_to_csv
 from config import config
-import hashlib
 
 # ページ設定
 st.set_page_config(
@@ -75,13 +74,9 @@ with st.sidebar:
     st.divider()
     st.caption("Powered by Claude Sonnet 4.0")
 
-# セッションステート初期化（二重起動防止用）
-if 'processing_cache' not in st.session_state:
-    st.session_state.processing_cache = {}
-if 'last_processed_hash' not in st.session_state:
-    st.session_state.last_processed_hash = None
-if 'last_result' not in st.session_state:
-    st.session_state.last_result = None
+# セッションステート初期化（結果保存用）
+if 'processing_result' not in st.session_state:
+    st.session_state.processing_result = None
 
 # メインコンテンツ
 st.title("📊 PDF仕訳抽出システム")
@@ -111,15 +106,6 @@ if not config.ANTHROPIC_API_KEY or config.ANTHROPIC_API_KEY == 'DUMMY_API_KEY':
 # 変換処理
 if uploaded_file is not None:
     
-    # ファイルハッシュ計算（二重起動防止用）
-    file_content = uploaded_file.read()
-    file_hash = hashlib.md5(file_content).hexdigest()
-    uploaded_file.seek(0)  # ファイルポインタリセット
-    
-    # キャッシュチェック
-    is_cached = file_hash in st.session_state.processing_cache
-    cached_result = st.session_state.processing_cache.get(file_hash)
-    
     # 概算費用計算（ファイルサイズ×係数）
     estimated_pages = max(1, int(uploaded_file.size / (1024 * 300)))  # 300KB/ページ仮定
     estimate_cost_usd = estimated_pages * 0.01  # 1ページあたり$0.01概算
@@ -127,16 +113,6 @@ if uploaded_file is not None:
     
     # 概算コスト表示
     st.info(f"📊 **概算**: {estimated_pages}ページ予想 / 概算費用: ¥{estimate_cost_jpy:.0f} (${estimate_cost_usd:.3f} USD)")
-    
-    # キャッシュクリアオプション
-    if is_cached and cached_result:
-        st.warning("⚠️ このファイルは既に処理済みです。再処理する場合は下のボタンをクリックしてください。")
-        col_clear1, col_clear2, col_clear3 = st.columns([1, 2, 1])
-        with col_clear2:
-            if st.button("🗑️ キャッシュをクリアして再処理", type="secondary", use_container_width=True):
-                if file_hash in st.session_state.processing_cache:
-                    del st.session_state.processing_cache[file_hash]
-                st.rerun()
     
     # 変換ボタン
     st.divider()
@@ -152,179 +128,128 @@ if uploaded_file is not None:
     
     # 処理実行
     if convert_clicked:
-        if is_cached and cached_result:
-            # キャッシュから結果を取得
-            df, csv_bytes, processing_info = cached_result
-            st.info("💾 キャッシュから結果を取得しています（同一ファイル再処理防止）")
-        else:
-            # 新規処理
-            with st.spinner("🔄 Claude Sonnet 4.0で仕訳データを抽出中..."):
-                try:
-                    start_time = datetime.now()
-                    
-                    # プログレスバー表示
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    status_text.text("📄 PDFファイルを分析中...")
-                    progress_bar.progress(25)
-                    
-                    # メイン処理
-                    df, csv_bytes, processing_info = process_pdf_to_csv(uploaded_file)
-                    
-                    # 結果をキャッシュに保存
-                    st.session_state.processing_cache[file_hash] = (df, csv_bytes, processing_info)
-                    st.session_state.last_processed_hash = file_hash
-                    st.session_state.last_result = (df, csv_bytes, processing_info)
-                    
-                    progress_bar.progress(75)
-                    status_text.text("✅ 仕訳データ抽出完了！")
-                    progress_bar.progress(100)
-                    
-                    processing_time = (datetime.now() - start_time).total_seconds()
-                    
-                except Exception as e:
-                    st.error(f"💥 変換に失敗しました: {str(e)}")
-                    logger.error(f"PDF processing error: {e}", exc_info=True)
-                    
-                    # エラー時のフォールバック処理
-                    df = pd.DataFrame()  # 空のDataFrame
-                    csv_bytes = b""
-                    processing_info = {"cost_usd": 0.0, "cost_jpy": 0.0, "error": str(e)}
-                    processing_time = 0.0
+        # 新規処理
+        with st.spinner("🔄 Claude Sonnet 4.0で仕訳データを抽出中..."):
+            try:
+                start_time = datetime.now()
                 
-                # 結果表示（エラー情報がある場合は警告表示）
-                if processing_info.get("error"):
-                    st.warning(f"⚠️ 処理は完了しましたが、一部でエラーが発生しました: {processing_info['error']}")
-                else:
-                    st.success(f"🎉 変換が完了しました！処理時間: {processing_time:.1f}秒")
+                # プログレスバー表示
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                status_text.text("📄 PDFファイルを分析中...")
+                progress_bar.progress(25)
+                
+                # メイン処理
+                df, csv_bytes, processing_info = process_pdf_to_csv(uploaded_file)
+                
+                processing_time = (datetime.now() - start_time).total_seconds()
+                
+                # 処理時間を結果に追加
+                processing_info['processing_time'] = processing_time
+                
+                # 結果をセッションに保存（再表示用）
+                st.session_state.processing_result = (df, csv_bytes, processing_info)
+                
+                progress_bar.progress(75)
+                status_text.text("✅ 仕訳データ抽出完了！")
+                progress_bar.progress(100)
                 
                 # プログレスバーを削除
                 progress_bar.empty()
                 status_text.empty()
                 
-                # 結果サマリー
-                col_result1, col_result2, col_result3 = st.columns(3)
-                with col_result1:
-                    st.metric("抽出エントリ数", len(df))
-                with col_result2:
-                    st.metric("処理時間", f"{processing_time:.1f}秒")
-                with col_result3:
-                    # API費用概算表示（トークンベース）
-                    if processing_info.get("cost_jpy", 0) > 0:
-                        # 最新レート情報を取得して表示
-                        try:
-                            current_rate = config.get_current_usd_to_jpy_rate()
-                            rate_info = f"為替レート: {current_rate:.2f} JPY/USD"
-                        except:
-                            rate_info = "為替レート: 取得失敗"
-                            
-                        st.metric(
-                            "API費用概算", 
-                            f"¥{processing_info['cost_jpy']:.2f}",
-                            help=f"⚠️ 概算値です。実際の請求と異なる場合があります。\n\n計算値: ${processing_info['cost_usd']:.4f} USD\n{rate_info}\nトークン使用量×API単価で計算\n\n※ 為替レート変動や請求タイミングにより実際の費用と差が生じる可能性があります"
-                        )
-                    else:
-                        # フォールバック: モックデータまたは費用計算失敗時
-                        pages_processed = processing_info.get('pages_processed', max(1, len(df) // 5))
-                        estimated_cost_jpy = pages_processed * 15  # 1ページあたり約15円の概算
-                        
-                        st.metric(
-                            "API費用概算", 
-                            f"¥{estimated_cost_jpy:.0f}",
-                            help=f"概算: {pages_processed}ページ × ¥15/ページ\n※実際の費用はトークン数により変動"
-                        )
+            except Exception as e:
+                st.error(f"💥 変換に失敗しました: {str(e)}")
+                logger.error(f"PDF processing error: {e}", exc_info=True)
                 
-                # データプレビュー
-                if not df.empty:
-                    st.divider()
-                    st.subheader("📋 ミロク取込45列CSV プレビュー")
-                    st.info("🔄 抽出された5カラムJSON → ミロク取込45列CSV に変換済み（科目コード自動補完）")
-                    
-                    # 表示件数選択
-                    display_count = st.selectbox(
-                        "表示件数を選択", 
-                        [10, 25, 50, 100, len(df)],
-                        index=1,
-                        key="display_count"
-                    )
-                    
-                    # データ表示
-                    st.dataframe(
-                        df.head(display_count), 
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    
-                    if len(df) > display_count:
-                        st.info(f"表示: {display_count}件 / 全{len(df)}件")
-                else:
-                    st.warning("⚠️ 抽出結果が空でした。PDFの内容をご確認ください。")
+                processing_time = (datetime.now() - start_time).total_seconds()
                 
-                # 抽出状況チェックとダウンロードボタン
-                st.divider()
-                entries_extracted = len(df)
+                # エラー時のフォールバック処理
+                df = pd.DataFrame()  # 空のDataFrame
+                csv_bytes = b""
+                processing_info = {
+                    "cost_usd": 0.0, 
+                    "cost_jpy": 0.0, 
+                    "processing_time": processing_time,
+                    "error": str(e)
+                }
                 
-                if entries_extracted == 0:
-                    st.warning("⚠️ **抽出が未実行です**。『🚀 仕訳データ抽出開始』を押してください")
-                    st.info("📝 CSVダウンロードは抽出完了後に有効になります")
-                    
-                    # 無効化されたダウンロードボタン
-                    col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
-                    with col_dl2:
-                        st.button(
-                            "📥 45列CSVをダウンロード (無効)",
-                            disabled=True,
-                            use_container_width=True,
-                            help="抽出完了後に有効になります"
-                        )
-                else:
-                    # 有効なダウンロードボタン
-                    col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
-                    with col_dl2:
-                        download_filename = f"{Path(uploaded_file.name).stem}_mjs45_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-                        st.download_button(
-                            label="📥 ミロク取込45列CSV をダウンロード",
-                            data=csv_bytes,
-                            file_name=download_filename,
-                            mime="text/csv",
-                            use_container_width=True,
-                            type="secondary",
-                            help="ミロク会計システムに直接取り込み可能な45列形式のCSVファイル"
-                        )
-                
-        # エラー詳細（デバッグモード時）
-        if config.DEBUG_MODE and 'processing_info' in locals() and processing_info.get("error"):
-            with st.expander("🔍 エラー詳細（デバッグ情報）"):
-                st.code(processing_info["error"])
-    
-    # キャッシュされた結果がある場合は表示（ボタンクリックなしでも）
-    elif is_cached and cached_result:
-        df, csv_bytes, processing_info = cached_result
-        st.success("✅ 処理済みファイル - 結果を表示中")
+                # エラー結果もセッションに保存
+                st.session_state.processing_result = (df, csv_bytes, processing_info)
         
-        # 結果サマリー表示
+    # 結果表示（処理完了後または既存結果がある場合）
+    if st.session_state.processing_result:
+        df, csv_bytes, processing_info = st.session_state.processing_result
+        processing_time = processing_info.get('processing_time', 0)
+        
+        # 結果表示（エラー情報がある場合は警告表示）
+        if processing_info.get("error"):
+            st.warning(f"⚠️ 処理は完了しましたが、一部でエラーが発生しました: {processing_info['error']}")
+        else:
+            st.success(f"🎉 変換が完了しました！処理時間: {processing_time:.1f}秒")
+        
+        # 結果サマリー
         col_result1, col_result2, col_result3 = st.columns(3)
         with col_result1:
             st.metric("抽出エントリ数", len(df))
         with col_result2:
-            st.metric("処理時間", f"{processing_info.get('processing_time', 0):.1f}秒")
+            st.metric("処理時間", f"{processing_time:.1f}秒")
         with col_result3:
+            # API費用概算表示（トークンベース）
             if processing_info.get("cost_jpy", 0) > 0:
-                st.metric("API費用概算", f"¥{processing_info['cost_jpy']:.2f}")
+                # 最新レート情報を取得して表示
+                try:
+                    current_rate = config.get_current_usd_to_jpy_rate()
+                    rate_info = f"為替レート: {current_rate:.2f} JPY/USD"
+                except:
+                    rate_info = "為替レート: 取得失敗"
+                    
+                st.metric(
+                    "API費用実績", 
+                    f"¥{processing_info['cost_jpy']:.2f}",
+                    help=f"✅ トークン使用量ベースの実際の費用です。\n\n計算値: ${processing_info['cost_usd']:.4f} USD\n{rate_info}\nClaude API利用料金×使用トークン数\n\n※ 為替レート変動により表示金額と請求額が異なる場合があります"
+                )
+            else:
+                # フォールバック: モックデータまたは費用計算失敗時
+                pages_processed = processing_info.get('pages_processed', max(1, len(df) // 5))
+                estimated_cost_jpy = pages_processed * 15  # 1ページあたり約15円の概算
+                
+                st.metric(
+                    "API費用概算", 
+                    f"¥{estimated_cost_jpy:.0f}",
+                    help=f"概算: {pages_processed}ページ × ¥15/ページ\n※実際の費用はトークン数により変動"
+                )
         
         # データプレビュー
         if not df.empty:
             st.divider()
             st.subheader("📋 ミロク取込45列CSV プレビュー")
-            display_count = st.selectbox("表示件数を選択", [10, 25, 50, 100, len(df)], index=1)
-            st.dataframe(df.head(display_count), use_container_width=True, hide_index=True)
+            st.info("🔄 抽出された5カラムJSON → ミロク取込45列CSV に変換済み（科目コード自動補完）")
+            
+            # 表示件数選択
+            display_count = st.selectbox(
+                "表示件数を選択", 
+                [10, 25, 50, 100, len(df)],
+                index=1,
+                key="display_count"
+            )
+            
+            # データ表示
+            st.dataframe(
+                df.head(display_count), 
+                use_container_width=True,
+                hide_index=True
+            )
+            
             if len(df) > display_count:
                 st.info(f"表示: {display_count}件 / 全{len(df)}件")
+        else:
+            st.warning("⚠️ 抽出結果が空でした。PDFの内容をご確認ください。")
         
         # ダウンロードボタン
+        st.divider()
         if len(df) > 0:
-            st.divider()
             col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
             with col_dl2:
                 download_filename = f"{Path(uploaded_file.name).stem}_mjs45_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -337,6 +262,20 @@ if uploaded_file is not None:
                     type="secondary",
                     help="ミロク会計システムに直接取り込み可能な45列形式のCSVファイル"
                 )
+        else:
+            col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
+            with col_dl2:
+                st.button(
+                    "📥 45列CSVをダウンロード (データなし)",
+                    disabled=True,
+                    use_container_width=True,
+                    help="抽出されたデータがありません"
+                )
+        
+        # エラー詳細（デバッグモード時）
+        if config.DEBUG_MODE and processing_info.get("error"):
+            with st.expander("🔍 エラー詳細（デバッグ情報）"):
+                st.code(processing_info["error"])
 
 # 使用方法とヒント
 st.divider()
@@ -349,7 +288,7 @@ with st.expander("📖 使用方法とヒント"):
     4. **CSV出力**: 「CSVファイルをダウンロード」でファイル保存
     
     ### 💡 処理のポイント
-    - **分割処理**: 大きなPDFは5ページずつ分割して効率的に処理
+    - **ページ別処理**: PDFを1ページずつ精密に分析・処理
     - **高精度AI**: Claude Sonnet 4.0の視覚認識で正確な仕訳抽出
     - **日本語対応**: 日本の会計基準に対応した仕訳形式で出力
     
