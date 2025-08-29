@@ -453,49 +453,91 @@ class ProductionPDFExtractor:
                 page_range=page_range
             )
             
-            # Claude Sonnet 4.0 API呼び出し
+            # Claude Sonnet 4.0 API呼び出し（JSON抽出ガード付き）
             response_text, cost_usd = self._call_claude_api(prompt, images_b64)
             
-            # Clean and parse JSON
-            cleaned_response = self._clean_json_response(response_text)
-            
-            # デバッグ用：クリーニング後の内容をログ出力
-            logger.info(f"Cleaned response length: {len(cleaned_response)} characters")
-            logger.info(f"Cleaned response preview: {cleaned_response[:300]}...")
-            
+            # JSON抽出ガードを使用してパース
+            from utils.json_guard import parse_5cols_json, get_fallback_entry
             try:
-                extracted_data = json.loads(cleaned_response)
-                
-                # デバッグ用：パース成功時の詳細
-                logger.info(f"JSON parsing successful. Data type: {type(extracted_data)}")
-                if isinstance(extracted_data, list):
-                    logger.info(f"Extracted data count: {len(extracted_data)}")
-                else:
-                    logger.info(f"Extracted data structure: {list(extracted_data.keys()) if isinstance(extracted_data, dict) else 'Not a dict'}")
-                
-                # Validate extracted data
-                validated_data = self._validate_extracted_data(extracted_data, filename, page_range)
-                
-                logger.info(f"Extraction successful: {len(validated_data)} entries")
-                return validated_data
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON parse error: {e}")
-                logger.error(f"Original response (first 500 chars): {response_text[:500]}...")
-                logger.error(f"Cleaned response (first 500 chars): {cleaned_response[:500]}...")
-                
-                # Try to recover partial data
-                logger.info("Attempting JSON recovery...")
-                recovered_data = self._attempt_json_recovery(response_text, filename, page_range)
-                if recovered_data:
-                    logger.info(f"JSON recovery successful: {len(recovered_data)} entries")
-                else:
-                    logger.error("JSON recovery failed - returning empty result")
-                return recovered_data
-                
+                extracted_data = parse_5cols_json(response_text)
+            except Exception as e:
+                logger.error(f"JSON抽出ガードでエラー: {e}")
+                logger.info(f"JSON抽出失敗 - 原因: {type(e).__name__}: {str(e)[:100]}")
+                # 1回のみリトライ（短縮プロンプト）
+                logger.info("短縮プロンプトで1回リトライ")
+                try:
+                    retry_prompt = "出力はJSON配列のみ。各要素は5カラム（伝票日付/借貸区分/科目名/金額/摘要）。余計な文字・コードフェンス禁止。"
+                    retry_response, retry_cost = self._call_claude_api(retry_prompt, images_b64)
+                    cost_usd += retry_cost
+                    extracted_data = parse_5cols_json(retry_response)
+                    logger.info(f"リトライ成功: {len(extracted_data)}エントリ")
+                except Exception as retry_e:
+                    logger.error(f"リトライも失敗: {retry_e}")
+                    logger.info(f"JSON抽出失敗 - 原因: リトライ後もパース失敗 ({type(retry_e).__name__})")
+                    extracted_data = get_fallback_entry("抽出不能")
+            
+            # 統計更新
+            self.stats['total_cost_usd'] += cost_usd
+            current_usd_rate = config.get_current_usd_to_jpy_rate()
+            cost_jpy = cost_usd * current_usd_rate
+            self.stats['total_cost_jpy'] += cost_jpy
+            
+            # 成功ログ（詳細情報付き）
+            logger.info(f"抽出成功: {len(extracted_data)}エントリ, 費用: ${cost_usd:.4f} USD (¥{cost_jpy:.2f} JPY)")
+            logger.debug(f"抽出データサンプル: {self._sanitize_extracted_data_for_logging(extracted_data[:2])}")
+            return extracted_data
+            
         except Exception as e:
             logger.error(f"API extraction failed: {filename} - {e}")
             raise
+    
+    def _sanitize_for_logging(self, text: str) -> str:
+        """
+        ログ出力用にPII（個人識別情報）をマスキング
+        
+        Args:
+            text: 元のテキスト
+            
+        Returns:
+            str: マスキング後のテキスト
+        """
+        import re
+        
+        if not text:
+            return text
+            
+        # 氏名のマスキング（カタカナ・ひらがな・漢字の人名パターン）
+        # 例: "山下良三" -> "山***", "タナカ" -> "タ**"
+        name_pattern = r'([\u4e00-\u9faf\u3040-\u309f\u30a0-\u30ff]{2,4})(?=[\s\u3000\u3001\u3002,.:;]|$)'
+        text = re.sub(name_pattern, lambda m: m.group(1)[0] + '*' * (len(m.group(1)) - 1), text)
+        
+        # 住所の一部マスキング（町名・番地）
+        text = re.sub(r'(\d+)[-－](\d+)[-－](\d+)', r'***-***-***', text)
+        
+        return text
+        
+    def _sanitize_extracted_data_for_logging(self, data: List[Dict]) -> List[Dict]:
+        """
+        抽出データのログ出力用サニタイズ
+        
+        Args:
+            data: 抽出データ
+            
+        Returns:
+            List[Dict]: マスキング後のデータ
+        """
+        if not data:
+            return []
+            
+        sanitized = []
+        for entry in data[:2]:  # 最初の2件のみ
+            sanitized_entry = entry.copy()
+            # 摘要のマスキング
+            if '摘要' in sanitized_entry:
+                sanitized_entry['摘要'] = self._sanitize_for_logging(sanitized_entry['摘要'])
+            sanitized.append(sanitized_entry)
+            
+        return sanitized
     
     def _call_claude_api(self, prompt: str, images_b64: List[str]) -> Tuple[str, float]:
         """Call Claude Sonnet 4.0 API with images"""
@@ -519,12 +561,14 @@ class ProductionPDFExtractor:
             
             logger.info(f"Making Claude API call with model: {self.model_name}")
             
-            # Make API call
+            # Make API call with stabilized settings
             response = self.client.messages.create(
                 model=self.model_name,
-                max_tokens=self.max_tokens,
+                max_tokens=4096,  # 安定化: 切断を避ける
+                temperature=0,    # 安定化: 精度重視
                 messages=[message],
-                timeout=self.request_timeout
+                timeout=self.request_timeout,
+                stop_sequences=["\n\n"]  # 後書き抑止
             )
             
             # usage 情報をログに追加と費用計算
@@ -552,9 +596,14 @@ class ProductionPDFExtractor:
             
             response_text = response.content[0].text.strip()
             
-            # レスポンス内容をログに記録（デバッグ用）
-            logger.info(f"Claude API Response length: {len(response_text)} characters")
-            logger.info(f"Claude API Response preview: {response_text[:200]}...")
+            # レスポンス内容をログに記録（デバッグ用・PII配慮）
+            sanitized_preview = self._sanitize_for_logging(response_text[:8000])  # 最大8KB
+            logger.debug(f"Claude API Response length: {len(response_text)} characters")
+            logger.debug(f"Claude API Response preview: {sanitized_preview[:500]}...")
+            
+            # 推定結果件数をログに記録
+            estimated_entries = response_text.count('"{') if response_text else 0
+            logger.info(f"Claude API推定結果: {estimated_entries}件のエントリ候補")
             
             # デバッグ用: レスポンスをファイルに保存
             if config.DEBUG_MODE:
@@ -712,8 +761,39 @@ class ProductionPDFExtractor:
         return mock_entries
     
     def _get_enhanced_prompt_template(self) -> str:
-        """Get enhanced prompt template with better instructions"""
-        return """あなたは帳票OCRの変換器です。与えられた画像（PDFページ）から仕訳情報を抽出し、次の5カラムのみを使ってJSON配列で出力してください。 出力以外のテキスト（説明・コード・表）は一切出力しないこと。 出力カラム（変更なし） 伝票日付：YYYY/M/D に正規化（和暦→西暦） 借貸区分："借方" or "貸方" 科目名：科目/口座の名称（不明は空文字） 金額：半角数値・カンマ無し・正の数 摘要：取引要約＋固有情報を必ず含める（物件名・号室・契約者名・オーナー名・○月分賃料 等） 新規追加：共通摘要の継承（最重要） 同一の表枠（1明細ブロック）内で中央の「摘要/適用」欄に記載された固有情報は、借方・貸方のすべてのレッグに共通情報として完全にコピー**して入れること。 共通として継承する代表例： 物件名 / 号室 / 契約者名 / オーナー名 / ○月分賃料 / 伝票の種別（退居振替・保証料・家賃 等） 各レッグ固有の違い（科目名や"借方/貸方"の別）は摘要末尾にだけ短く追記： 借方レッグ：…; 借方: {科目名} 貸方レッグ：…; 貸方: {科目名} 同一ページに複数枠がある場合は枠単位で共通摘要を判定して継承する。 もし枠内で記載が欠落している行があっても、他行に書かれている共通情報で補完する。 値が食い違う場合は、多数決または情報量が多い方を共通とし、不確実なら摘要末尾に 【OCR注意: 目視確認推奨】 を付ける。 そのほかのルール（従来どおり） 複合仕訳：1レッグ=1要素（借2＋貸1なら3要素） 正規化：NFKC、数字は半角、金額から記号除去 不一致の疑い（借方合計≠貸方合計 等）や判読不確実：摘要末尾に 【OCR注意: 目視確認推奨】 データ未検出時：{"伝票日付":"", "借貸区分":"", "科目名":"", "金額":0, "摘要":"抽出不能【OCR注意: 目視確認推奨】"} の1要素のみ Few-shot（共通摘要の継承・2/12の例） 入力の要点（ページ内1枠） 共通摘要：退居振替; オーナー: 飯島えり子; 物件名: ルベール武蔵関; 号室: 101; 契約者名: 所 厚作 借方：預り敷金 49,000／三菱普通 33,500 貸方：退居営繕費売上 82,500 望ましい出力（共通摘要を全レッグに揃える） [ { "伝票日付":"2025/2/12", "借貸区分":"借方", "科目名":"預り敷金", "金額":49000, "摘要":"退居振替; オーナー: 飯島えり子; 物件名: ルベール武蔵関; 号室: 101; 契約者名: 所 厚作; 借方: 預り敷金" }, { "伝票日付":"2025/2/12", "借貸区分":"借方", "科目名":"三菱普通", "金額":33500, "摘要":"退居振替; オーナー: 飯島えり子; 物件名: ルベール武蔵関; 号室: 101; 契約者名: 所 厚作; 借方: 三菱普通" }, { "伝票日付":"2025/2/12", "借貸区分":"貸方", "科目名":"退居営繕費売上", "金額":82500, "摘要":"退居振替; オーナー: 飯島えり子; 物件名: ルベール武蔵関; 号室: 101; 契約者名: 所 厚作; 貸方: 退居営繕費売上" } ]"""
+        """Get enhanced prompt template with precision-focused auditor persona"""
+        return """あなたは「会計監査人の補助AI」です。帳票PDFのOCR結果を精査し、仕訳の正確性を保証する役割を持ちます。出力は**JSON配列のみ**（説明・表・コードフェンスなど一切禁止）。各要素は1仕訳レッグとして、次の5カラムを必ず含めてください。
+
+【出力カラム（必須・順序固定）】
+- 伝票日付: YYYY/M/D（和暦→西暦に変換）
+- 借貸区分: "借方" または "貸方"
+- 科目名: 勘定科目や口座名（不明は空文字）
+- 金額: 半角数字・カンマ無し・正の整数
+- 摘要: 取引要約＋固有情報（物件名・号室・契約者名・オーナー名・◯月分賃料 等）
+
+【共通摘要ルール】
+- 1つの伝票枠（1明細ブロック）内で中央の「摘要/適用」欄にある固有情報は、借方・貸方の全レッグへ**共通コピー**する。
+- 共通として継承する代表例: 物件名 / 号室 / 契約者名 / オーナー名 / ◯月分賃料 / 伝票種別（退去・更新・保証料・家賃 等）
+- レッグごとの差異（科目名や借方/貸方の別）は摘要末尾に付加:
+  - 借方: 「; 借方:{科目名}」
+  - 貸方: 「; 貸方:{科目名}」
+
+【補完・不一致対応】
+- 同一枠で欠落している固有情報は他行から補完する。
+- 記載が食い違う場合は情報量が多い方を優先。不確実な場合は摘要末尾に `【OCR注意:目視確認推奨】` を付す。
+- 金額は記号除去後の正の整数。不明時は0。
+- 表の左列は借方、右列は貸方として解釈すること（レイアウトが明確な場合）。借貸の合計一致は確認するが、数値を改変せず、注意は摘要に残す。
+
+【複合仕訳ルール】
+- 1レッグ=1要素（例: 借2＋貸1なら3要素）。
+- 科目名カラムは**必ず埋める**（本当に不明な場合のみ空文字）。摘要末尾への付記と重複してよい。
+
+【フォールバック】
+- 何も読めない場合は次の1要素のみを返す：
+  [{"伝票日付":"","借貸区分":"","科目名":"","金額":0,"摘要":"抽出不能【OCR注意:目視確認推奨】"}]
+
+【出力形式】
+- JSON配列のみ。キー名・順序・型を厳守。"""
     
     def process_single_pdf(self, pdf_path: Path, temp_dir: Path, pages_per_split: Optional[int] = None) -> ProcessingResult:
         """
