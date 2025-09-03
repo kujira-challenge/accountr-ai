@@ -89,7 +89,7 @@ with col1:
     uploaded_file = st.file_uploader(
         "📁 PDFファイルを選択してください",
         type=["pdf"],
-        help="5ページごとに分割処理され、アップロード後自動で抽出が開始されます。"
+        help="PDFファイルをアップロード後、「抽出開始」ボタンで処理を開始します。"
     )
 
 with col2:
@@ -103,7 +103,7 @@ if not config.ANTHROPIC_API_KEY or config.ANTHROPIC_API_KEY == 'DUMMY_API_KEY':
     st.info("📝 デプロイ後の設定が必要です。README.mdの手順に従ってAPIキーを設定してください。")
     st.stop()
 
-# 変換処理 - アップロードで自動実行
+# 変換処理 - 抽出開始ボタン
 if uploaded_file is not None:
     
     # 概算費用計算（ファイルサイズ×係数）
@@ -114,18 +114,16 @@ if uploaded_file is not None:
     # 概算コスト表示
     st.info(f"📊 **概算**: {estimated_pages}ページ予想 / 概算費用: ¥{estimate_cost_jpy:.0f} (${estimate_cost_usd:.3f} USD)")
     
-    # 自動処理開始（ボタンなし）
+    # 抽出開始ボタン
     st.divider()
-    st.info("🚀 **アップロードで自動抽出中...**")
-    
-    # 新しいファイルがアップロードされた場合のみ処理
-    if 'last_uploaded_file' not in st.session_state or st.session_state.last_uploaded_file != uploaded_file.name:
-        # ファイル名を記録
-        st.session_state.last_uploaded_file = uploaded_file.name
-        # 処理フラグをリセット
-        convert_clicked = True
-    else:
-        convert_clicked = False
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
+    with col_btn2:
+        convert_clicked = st.button(
+            "🚀 抽出開始",
+            use_container_width=True,
+            type="primary",
+            help="Claude Sonnet 4.0で仕訳データの抽出を開始します"
+        )
     
     # 処理実行
     if convert_clicked:
@@ -293,14 +291,14 @@ with st.expander("📖 使用方法とヒント"):
     st.markdown("""
     ### 📋 使用手順
     1. **PDFファイル選択**: 仕訳データが含まれるPDFファイルを選択
-    2. **自動抽出**: アップロードと同時に自動で抽出開始
+    2. **抽出開始**: 「抽出開始」ボタンをクリックして処理を開始
     3. **結果確認**: 抽出されたデータをプレビューで確認
     4. **CSV出力**: 「ミロク取込45列CSVをダウンロード」でファイル保存
     
     ### 💡 処理のポイント
     - **5ページチャンク処理**: PDFを5ページずつ安定的に分析・処理
     - **高精度AI**: Claude Sonnet 4.0の視覚認識で正確な仕訳抽出
-    - **自動化**: アップロードと同時に抽出開始、ワンクリック操作
+    - **簡単操作**: ファイルアップロード後、ボタン1つで抽出開始
     - **日本語対応**: 日本の会計基準に対応した仕訳形式で出力
     
     ### ⚠️ 注意事項
