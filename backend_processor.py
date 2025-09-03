@@ -72,26 +72,38 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
                 
                 logger.info(f"5-column JSON saved: {json_path}")
                 
-                # 2. 45列CSVに変換
-                mjs_csv_path = temp_path / f"{uploaded_file.name}_mjs45.csv"
-                conversion_log_path = temp_path / "mjs_conversion.log"
-                
-                try:
-                    fivejson_to_mjs45(
-                        str(json_path),
-                        config.ACCOUNT_CODE_CSV_PATH,
-                        str(mjs_csv_path),
-                        str(conversion_log_path)
-                    )
-                    
-                    # 3. 45列CSVを読み込んでDataFrameに変換
-                    df = pd.read_csv(mjs_csv_path, encoding='utf-8-sig')
-                    logger.info(f"MJS 45-column CSV loaded: {len(df)} rows")
-                    
-                except Exception as e:
-                    logger.error(f"MJS conversion failed: {e}")
-                    # フォールバック: 空の45列DataFrame
+                # 2. 勘定科目CSVファイルの存在確認
+                account_code_csv_path = str(config.ACCOUNT_CODE_CSV_PATH)
+                if not Path(account_code_csv_path).exists():
+                    logger.error(f"Account code CSV file not found: {account_code_csv_path}")
+                    # 空の45列DataFrameを作成
                     df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
+                    logger.warning("Using empty DataFrame due to missing account code CSV")
+                else:
+                    # 3. 45列CSVに変換
+                    mjs_csv_path = temp_path / f"{uploaded_file.name}_mjs45.csv"
+                    conversion_log_path = temp_path / "mjs_conversion.log"
+                    
+                    try:
+                        fivejson_to_mjs45(
+                            str(json_path),
+                            account_code_csv_path,
+                            str(mjs_csv_path),
+                            str(conversion_log_path)
+                        )
+                        
+                        # 4. 45列CSVを読み込んでDataFrameに変換
+                        if mjs_csv_path.exists():
+                            df = pd.read_csv(mjs_csv_path, encoding='utf-8-sig')
+                            logger.info(f"MJS 45-column CSV loaded: {len(df)} rows")
+                        else:
+                            logger.error("MJS CSV file was not created")
+                            df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
+                        
+                    except Exception as e:
+                        logger.error(f"MJS conversion failed: {e}")
+                        # フォールバック: 空の45列DataFrame
+                        df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
                 
             else:
                 # 空の45列DataFrame作成

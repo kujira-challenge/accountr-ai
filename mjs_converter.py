@@ -58,6 +58,12 @@ class MJSConverter:
     def load_account_codes(self, account_code_csv_path: str) -> None:
         """勘定科目コード一覧CSVを読み込み"""
         try:
+            # ファイルの存在確認
+            from pathlib import Path
+            if not Path(account_code_csv_path).exists():
+                logger.error(f"Account code CSV file not found: {account_code_csv_path}")
+                raise FileNotFoundError(f"Account code CSV file not found: {account_code_csv_path}")
+            
             # Shift-JIS → UTF-8-sig フォールバック読み込み
             try:
                 df = pd.read_csv(account_code_csv_path, encoding='shift_jis')
@@ -342,6 +348,16 @@ def fivejson_to_mjs45(
     
     try:
         logger.info(f"Starting conversion: {ai_json_path} -> {out_csv_path}")
+        
+        # ファイル存在確認
+        from pathlib import Path
+        if not Path(ai_json_path).exists():
+            logger.error(f"Input JSON file not found: {ai_json_path}")
+            raise FileNotFoundError(f"Input JSON file not found: {ai_json_path}")
+        
+        if not Path(account_code_csv_path).exists():
+            logger.error(f"Account code CSV file not found: {account_code_csv_path}")
+            raise FileNotFoundError(f"Account code CSV file not found: {account_code_csv_path}")
         
         # 1. JSONデータの読み込み
         logger.info(f"Loading JSON from: {ai_json_path}")
