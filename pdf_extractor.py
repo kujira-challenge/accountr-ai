@@ -444,7 +444,11 @@ class ProductionPDFExtractor:
             
             # Systemプロンプト使用（固定化）
             system_prompt = self._get_system_prompt()
-            user_prompt = f"ファイル名: {filename}, ページ: {page_range}"
+            
+            # ユーザープロンプトに列ヒント文を追加
+            user_prompt = f"ファイル名: {filename}, ページ: {page_range}\n"
+            for page_idx in range(1, len(images_b64) + 1):
+                user_prompt += f"ページ{page_idx}：左=借方｜中央=摘要｜右=貸方（列を取り違えないでください）\n"
             
             # Claude Sonnet 4.0 API呼び出し（JSON抽出ガード付き）
             response_text, cost_usd = self._call_claude_api(system_prompt, user_prompt, images_b64)
@@ -468,6 +472,23 @@ class ProductionPDFExtractor:
                     logger.error(f"リトライも失敗: {retry_e}")
                     logger.info(f"JSON抽出失敗 - 原因: リトライ後もパース失敗 ({type(retry_e).__name__})")
                     extracted_data = get_fallback_entry("抽出不能")
+            
+            # 後処理: 貸借ペア保証と金額バリデーション
+            from utils.postprocess import postprocess_extracted_data
+            extracted_data, error_entries = postprocess_extracted_data(extracted_data)
+            
+            if error_entries:
+                logger.warning(f"Post-processing found {len(error_entries)} error entries (zero amounts, etc.)")
+                # エラーエントリの情報をログに記録（UI表示用）
+                for err in error_entries[:3]:  # 最初の3件のみログ出力
+                    logger.warning(f"Error entry: 日付={err.get('伝票日付', '')}, 金額={err.get('金額', 0)}, 摘要={err.get('摘要', '')[:50]}...")
+                if len(error_entries) > 3:
+                    logger.warning(f"... and {len(error_entries) - 3} more error entries")
+                
+                # エラー情報をstatsに保存（UI表示用）
+                if not hasattr(self, 'error_entries'):
+                    self.error_entries = []
+                self.error_entries.extend(error_entries)
             
             # 統計更新
             self.stats['total_cost_usd'] += cost_usd
@@ -733,33 +754,32 @@ class ProductionPDFExtractor:
         return mock_entries
     
     def _get_system_prompt(self) -> str:
-        """固定システムプロンプト（精度重視・監査人視点）"""
-        return """あなたは「会計監査人の補助AI」です。帳票PDFのOCR結果を精査し、仕訳の正確性を保証する役割を持ちます。出力は必ず**JSON配列のみ**（説明・表・コードフェンス等すべて禁止）。各要素=1仕訳レッグ、次の5カラムを必ず含めてください。
+        """強化システムプロンプト（貸借ペア保証・摘要統一）"""
+        return """あなたは「帳票OCR変換器（監査人視点）」です。A4の不動産伝票PDF（退去・振替・更新・新規など）から【5カラムJSON配列】を出力してください。
 
 【出力カラム（順序固定）】
-- 伝票日付: YYYY/M/D（和暦→西暦に正規化）
-- 借貸区分: "借方" or "貸方"
-- 科目名: 勘定科目/口座名（不明時のみ空）
-- 金額: 半角数字・カンマ無し・正の整数
-- 摘要: 取引要約＋固有情報（物件名・号室・契約者名・オーナー名・◯月分賃料 等）
+1) 伝票日付（YYYY/M/D、西暦）
+2) 借貸区分（借方 / 貸方）
+3) 科目名（不明なら空文字でよい）
+4) 金額（半角数字、正整数）
+5) 摘要（共通摘要＋行固有＋「; 借方:XXX / 貸方:YYY」）
 
-【共通摘要】
-- 1明細枠（ブロック）内の中央「摘要/適用」欄の固有情報は、借方/貸方すべてへ**共通コピー**する。
-- 差異（科目名・借方/貸方の別）は摘要末尾に付記：「; 借方:{科目名}」/「; 貸方:{科目名}」
+【レイアウトの絶対則】
+- 伝票は「左=借方／右=貸方」。中央に共通摘要。
+- 毎「枠」（行帯）について、必ず借方レッグと貸方レッグのペアを出力する。
+  - 片側が読めない場合：借貸区分は正しく、金額は枠の金額、不明側の科目名は空文字でよい。
+  - いずれの場合も摘要末尾に「; 借方:XXX / 貸方:YYY」を必ず付加。不明側は「不明【OCR注意】」と明記。
+- 枠ごとの借方金額合計と貸方金額合計は一致させる。合わないJSONを出力してはならない。
+  不足分は"不明"レッグを追加して合わせる（科目名は空文字で可）。
 
-【補完・不一致】
-- 枠内の欠落は他行から補完。不確実は摘要末尾に【OCR注意:目視確認推奨】。
-- レイアウトが明確な場合、**左列=借方 / 右列=貸方**として解釈。金額の合計一致は確認するが数値改変はしない。
+【共通摘要ルール】
+- 物件名・号室・契約者名・オーナー名・○月分賃料など、中央の枠単位の情報は、同枠の全レッグに継承する。
+- 枠内で不一致がある場合は情報量の多いものを採用。不確実なら摘要末尾に【OCR注意:目視確認推奨】。
 
-【複合仕訳】
-- 1レッグ=1要素（借2＋貸1なら3要素）。**科目名カラムは必ず埋める**（不明時のみ空文字）。
-
-【フォールバック】
-- 何も読めない場合は次の1要素のみを返す：
-  [{"伝票日付":"","借貸区分":"","科目名":"","金額":0,"摘要":"抽出不能【OCR注意:目視確認推奨】"}]
-
-【出力形式】
-- JSON配列のみ。キー名・順序・型を厳守。"""
+【形式】
+- 出力は JSON 配列のみ。余計な説明文は禁止。
+- 金額に負数や記号は使わない。
+- フォールバック：抽出不能でも配列1要素は必ず返す（科目名空、摘要末尾に【OCR注意】）。"""
     
     def process_single_pdf(self, pdf_path: Path, temp_dir: Path, pages_per_split: Optional[int] = None) -> ProcessingResult:
         """

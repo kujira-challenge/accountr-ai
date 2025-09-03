@@ -53,6 +53,8 @@ class MJSConverter:
     def __init__(self):
         """初期化"""
         self.account_codes = {}  # {正規化科目名: (科目コード, 補助コード)}
+        self.alias_map = {}  # {エイリアス: (科目コード, 補助コード) or 正規化科目名}
+        self.account_name_map = {}  # 高速検索用: {正規化科目名: (科目コード, 補助コード)}
         logger.info("MJSConverter initialized")
     
     def load_account_codes(self, account_code_csv_path: str) -> None:
@@ -101,16 +103,22 @@ class MJSConverter:
                 
                 if account_name and account_code:
                     normalized_name = norm(account_name)
-                    self.account_codes[normalized_name] = (account_code, aux_code)
+                    codes = (account_code, aux_code)
+                    self.account_codes[normalized_name] = codes
+                    self.account_name_map[normalized_name] = codes
                     
                     # 補助科目名も追加（もしあれば）
                     if aux_name_col and pd.notna(row[aux_name_col]):
                         aux_name = str(row[aux_name_col]).strip()
                         if aux_name:
                             normalized_aux_name = norm(aux_name)
-                            self.account_codes[normalized_aux_name] = (account_code, aux_code)
+                            self.account_codes[normalized_aux_name] = codes
+                            self.account_name_map[normalized_aux_name] = codes
             
-            logger.info(f"Account codes loaded: {len(self.account_codes)} entries")
+            # エイリアスCSVの読み込み
+            self.load_aliases()
+            
+            logger.info(f"Account codes loaded: {len(self.account_codes)} entries, aliases: {len(self.alias_map)} entries")
             
         except Exception as e:
             logger.error(f"Failed to load account codes: {e}")
@@ -124,43 +132,119 @@ class MJSConverter:
                     return col
         return None
     
+    def load_aliases(self) -> None:
+        """エイリアスCSVを読み込み（存在する場合）"""
+        alias_csv_path = Path("科目エイリアス.csv")
+        if not alias_csv_path.exists():
+            logger.info("Alias CSV not found, skipping alias loading")
+            return
+        
+        try:
+            import csv
+            with alias_csv_path.open("r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    alias = self._norm_alias(row.get("alias", ""))
+                    if not alias:
+                        continue
+                    
+                    # 直接コード指定の場合
+                    if row.get("code"):
+                        self.alias_map[alias] = (
+                            str(row["code"]).strip(), 
+                            str(row.get("aux_code", "")).strip()
+                        )
+                    # 正規化科目名への参照の場合
+                    elif row.get("target_name"):
+                        self.alias_map[alias] = str(row["target_name"]).strip()
+            
+            logger.info(f"Loaded {len(self.alias_map)} aliases from CSV")
+        
+        except Exception as e:
+            logger.warning(f"Failed to load aliases: {e}")
+    
+    def _norm_alias(self, text: str) -> str:
+        """エイリアス用の正規化（normよりも厳格）"""
+        import unicodedata, re
+        s = unicodedata.normalize("NFKC", text or "").strip()
+        s = re.sub(r"\s+", "", s)
+        return s
+    
+    def normalize_alias_name(self, name: str) -> str:
+        """銀行ニックネームの正規化（表記ゆれ対応）"""
+        n = self._norm_alias(name)
+        
+        # 表記ゆれのルール（運用に合わせて調整）
+        rules = [
+            (r"(西京|ｻｲｷｮｳ).*(普通|普)", "普通預金（西京）"),
+            (r"(三菱|MUFG|UFJ).*(普通|普)", "普通預金（三菱）"),
+            (r"(営繕|えいぜん)", "営繕費"),
+            (r"(退居|退去).*(営繕|えいぜん)", "営繕費"),
+        ]
+        
+        for pattern, canonical in rules:
+            if re.search(pattern, n, flags=re.I):
+                return canonical
+        
+        return name
+    
     def lookup_account_code(self, account_name: str) -> Tuple[str, str]:
-        """科目名から科目コードと補助コードを検索"""
-        if not account_name.strip():
+        """科目名から科目コードと補助コードを検索（エイリアス・ファジー対応強化）"""
+        if not account_name or not account_name.strip():
             return "", ""
         
-        normalized_name = norm(account_name)
-        logger.debug(f"Looking up account: '{account_name}' -> normalized: '{normalized_name}'")
+        # 1. エイリアス正規化
+        normalized_name = self.normalize_alias_name(account_name)
+        norm_name = norm(normalized_name)
         
-        # 1. 完全一致
-        if normalized_name in self.account_codes:
-            result = self.account_codes[normalized_name]
+        logger.debug(f"Looking up account: '{account_name}' -> normalized: '{normalized_name}' -> norm: '{norm_name}'")
+        
+        # 2. エイリアス直参照
+        alias_norm = self._norm_alias(account_name)
+        if alias_norm in self.alias_map:
+            mapped = self.alias_map[alias_norm]
+            if isinstance(mapped, tuple):   # (code, aux)
+                logger.debug(f"Alias direct match: {mapped}")
+                return mapped
+            # target_name文字列なら、その名前で再検索
+            logger.debug(f"Alias indirect match to: {mapped}")
+            return self.lookup_account_code(mapped)
+        
+        # 3. 完全一致
+        if norm_name in self.account_name_map:
+            result = self.account_name_map[norm_name]
             logger.debug(f"Exact match found: {result}")
             return result
         
-        # 2. 前方/部分一致
+        # 4. 部分一致（最長一致＋語彙優先）
         matches = []
-        for stored_name, codes in self.account_codes.items():
-            if normalized_name in stored_name or stored_name in normalized_name:
-                matches.append((stored_name, codes))
-                logger.debug(f"Partial match: '{stored_name}' -> {codes}")
+        PRIORITY = ["普通預金", "当座預金", "売上", "預り金", "立替金", "受取手数料", "敷金", "営繕", "保証金"]
         
-        # ユニークに決まる場合のみ
-        if len(matches) == 1:
-            result = matches[0][1]
-            logger.debug(f"Unique partial match found: {result}")
+        for stored_name, codes in self.account_name_map.items():
+            if norm_name in stored_name or stored_name in norm_name:
+                # スコア: (語彙ヒット数, 共通文字数, 候補名長の逆数)
+                vocab_hits = sum(1 for keyword in PRIORITY if keyword in stored_name)
+                common_chars = len(set(stored_name) & set(norm_name))
+                length_score = 1.0 / max(len(stored_name), 1)
+                
+                score = (vocab_hits, common_chars, length_score)
+                matches.append((score, stored_name, codes))
+                logger.debug(f"Partial match: '{stored_name}' (score: {score}) -> {codes}")
+        
+        if matches:
+            matches.sort(reverse=True)
+            result = matches[0][2]
+            logger.debug(f"Best partial match: {matches[0][1]} -> {result}")
             return result
-        elif len(matches) > 1:
-            logger.debug(f"Multiple partial matches found ({len(matches)}), skipping")
         
-        # 3. 近似一致（しきい値 0.85）
+        # 5. ファジー（閾値緩和: 0.78）
         best_ratio = 0.0
         best_match = None
         best_stored_name = ""
         
-        for stored_name, codes in self.account_codes.items():
-            r = ratio(normalized_name, stored_name)
-            if r > best_ratio and r >= 0.85:
+        for stored_name, codes in self.account_name_map.items():
+            r = ratio(norm_name, stored_name)
+            if r > best_ratio and r >= 0.78:  # 閾値緩和
                 best_ratio = r
                 best_match = codes
                 best_stored_name = stored_name
@@ -242,6 +326,10 @@ class MJSConverter:
         # 科目コードの補完
         account_name = str(entry.get("科目名", "")).strip()
         account_code, aux_code = self.lookup_account_code(account_name)
+        
+        # 未割当の場合は摘要に【科目コード要確認】を追記
+        if not account_code and account_name:
+            row["摘要"] = (row["摘要"] + " 【科目コード要確認】").strip()
         
         # 借貸区分に応じてコードを設定
         debit_credit = str(entry.get("借貸区分", "")).strip()

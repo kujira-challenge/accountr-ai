@@ -116,13 +116,20 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
             
             logger.info(f"CSV data prepared: {len(df)} rows, {len(csv_bytes)} bytes")
             
+            # エラー情報の収集
+            error_entries = getattr(extractor, 'error_entries', [])
+            missing_codes_count = len([row for _, row in df.iterrows() if '【科目コード要確認】' in str(row.get('摘要', ''))])
+            
             # 処理情報を準備
             processing_info = {
                 "cost_usd": getattr(result, 'total_cost_usd', 0.0),
                 "cost_jpy": getattr(result, 'total_cost_jpy', 0.0),
                 "processing_time": getattr(result, 'processing_time', 0.0),
                 "pages_processed": getattr(result, 'pages_processed', 0),
-                "entries_extracted": len(df)
+                "entries_extracted": len(df),
+                "error_entries": error_entries,
+                "missing_codes_count": missing_codes_count,
+                "zero_amount_errors": len(error_entries)
             }
             
             return df, csv_bytes, processing_info

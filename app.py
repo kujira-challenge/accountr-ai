@@ -182,11 +182,36 @@ if uploaded_file is not None:
         df, csv_bytes, processing_info = st.session_state.processing_result
         processing_time = processing_info.get('processing_time', 0)
         
-        # 結果表示（エラー情報がある場合は警告表示）
+        # 結果表示とエラー警告
+        zero_errors = processing_info.get('zero_amount_errors', 0)
+        missing_codes = processing_info.get('missing_codes_count', 0)
+        
         if processing_info.get("error"):
             st.warning(f"⚠️ 処理は完了しましたが、一部でエラーが発生しました: {processing_info['error']}")
+        elif zero_errors > 0 or missing_codes > 0:
+            st.warning(f"⚠️ 処理完了：一部データに注意が必要です")
         else:
-            st.success(f"🎉 自動抽出が完了しました！処理時間: {processing_time:.1f}秒")
+            st.success(f"🎉 抽出が完了しました！処理時間: {processing_time:.1f}秒")
+        
+        # エラー詳細の表示
+        if zero_errors > 0 or missing_codes > 0:
+            with st.expander("⚠️ データ品質に関する注意事項", expanded=True):
+                if zero_errors > 0:
+                    st.error(f"🚫 金額読取不可エラー: {zero_errors}件")
+                    st.caption("金額が0または読み取れなかった行はCSVから除外されました")
+                
+                if missing_codes > 0:
+                    st.warning(f"🔍 科目コード未割当: {missing_codes}件")
+                    st.caption("摘要に【科目コード要確認】が付記された行があります。手動で科目コードを設定してください")
+                
+                # エラーエントリの詳細表示
+                error_entries = processing_info.get('error_entries', [])
+                if error_entries:
+                    st.subheader("🚫 除外されたエントリ")
+                    for i, err in enumerate(error_entries[:5]):  # 最初の5件のみ表示
+                        st.text(f"{i+1}. 日付: {err.get('伝票日付', 'N/A')}, 金額: {err.get('金額', 0)}, 摘要: {err.get('摘要', '')[:50]}...")
+                    if len(error_entries) > 5:
+                        st.caption(f"... 他 {len(error_entries) - 5} 件")
         
         # 結果サマリー
         col_result1, col_result2, col_result3 = st.columns(3)
