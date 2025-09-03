@@ -93,17 +93,17 @@ class Config:
     # ==================================================
     # Processing Settings
     # ==================================================
-    USE_MOCK_DATA = os.getenv('USE_MOCK_DATA', 'false').lower() == 'true'  # 本番環境はデフォルトで実API使用
+    USE_MOCK_DATA = False  # モックモード完全撤廃 - 常に本番API使用
     DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
     
     # PDF Processing
-    PAGES_PER_SPLIT = int(os.getenv('PAGES_PER_SPLIT', '1'))  # ページ単位投入（画像1枚=1リクエスト）
+    PAGES_PER_SPLIT = int(os.getenv('PAGES_PER_SPLIT', '5'))  # 5ページ単位投入（安定化）
     MAX_FILE_SIZE_MB = int(os.getenv('MAX_FILE_SIZE_MB', '50'))
     PDF_DPI = int(os.getenv('PDF_DPI', '200'))  # 150-200DPI推奨、過度な圧縮回避
     
     # API Rate Limiting
     API_REQUEST_INTERVAL = float(os.getenv('API_REQUEST_INTERVAL', '2'))
-    MAX_RETRIES = int(os.getenv('MAX_RETRIES', '0'))  # No retries to save API costs
+    MAX_RETRIES = int(os.getenv('MAX_RETRIES', '1'))  # 1回リトライのみ
     REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '60'))
     
     # OCR Settings
@@ -148,7 +148,7 @@ class Config:
     # ==================================================
     # Error Handling
     # ==================================================
-    ENABLE_RETRY = os.getenv('ENABLE_RETRY', 'false').lower() == 'true'  # Disabled to save API costs
+    ENABLE_RETRY = os.getenv('ENABLE_RETRY', 'true').lower() == 'true'  # 1回リトライ有効
     RETRY_DELAY = float(os.getenv('RETRY_DELAY', '5'))
     EXPONENTIAL_BACKOFF = os.getenv('EXPONENTIAL_BACKOFF', 'false').lower() == 'true'
     

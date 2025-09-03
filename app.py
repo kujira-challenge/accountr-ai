@@ -56,8 +56,8 @@ except Exception as e:
 with st.sidebar:
     st.header("📊 システム情報")
     st.write("**AI Engine:** Claude Sonnet 4.0")
-    st.write(f"**分割単位:** {config.PAGES_PER_SPLIT}ページ")
-    st.write(f"**処理モード:** {'🧪 テスト' if config.USE_MOCK_DATA else '🚀 本番'}")
+    st.write(f"**分割単位:** 5ページ（安定化）")
+    st.write(f"**処理モード:** 🚀 本番（常時）")
     
     # API設定確認とエラーハンドリング
     try:
@@ -89,7 +89,7 @@ with col1:
     uploaded_file = st.file_uploader(
         "📁 PDFファイルを選択してください",
         type=["pdf"],
-        help="ページごとに分割処理されます（画像1枚=1リクエスト）。大きなファイルは時間がかかる場合があります。"
+        help="5ページごとに分割処理され、アップロード後自動で抽出が開始されます。"
     )
 
 with col2:
@@ -103,7 +103,7 @@ if not config.ANTHROPIC_API_KEY or config.ANTHROPIC_API_KEY == 'DUMMY_API_KEY':
     st.info("📝 デプロイ後の設定が必要です。README.mdの手順に従ってAPIキーを設定してください。")
     st.stop()
 
-# 変換処理
+# 変換処理 - アップロードで自動実行
 if uploaded_file is not None:
     
     # 概算費用計算（ファイルサイズ×係数）
@@ -114,21 +114,22 @@ if uploaded_file is not None:
     # 概算コスト表示
     st.info(f"📊 **概算**: {estimated_pages}ページ予想 / 概算費用: ¥{estimate_cost_jpy:.0f} (${estimate_cost_usd:.3f} USD)")
     
-    # 変換ボタン
+    # 自動処理開始（ボタンなし）
     st.divider()
-    col_button1, col_button2, col_button3 = st.columns([1, 2, 1])
+    st.info("🚀 **アップロードで自動抽出中...**")
     
-    with col_button2:
-        convert_clicked = st.button(
-            "🚀 仕訳データ抽出開始",
-            type="primary",
-            use_container_width=True,
-            help="Claude Sonnet 4.0を使用してPDFから仕訳データを抽出します"
-        )
+    # 新しいファイルがアップロードされた場合のみ処理
+    if 'last_uploaded_file' not in st.session_state or st.session_state.last_uploaded_file != uploaded_file.name:
+        # ファイル名を記録
+        st.session_state.last_uploaded_file = uploaded_file.name
+        # 処理フラグをリセット
+        convert_clicked = True
+    else:
+        convert_clicked = False
     
     # 処理実行
     if convert_clicked:
-        # 新規処理
+        # 自動処理
         with st.spinner("🔄 Claude Sonnet 4.0で仕訳データを抽出中..."):
             try:
                 start_time = datetime.now()
@@ -137,7 +138,7 @@ if uploaded_file is not None:
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                status_text.text("📄 PDFファイルを分析中...")
+                status_text.text("📄 PDFを5ページずつ分割中...")
                 progress_bar.progress(25)
                 
                 # メイン処理
@@ -152,7 +153,7 @@ if uploaded_file is not None:
                 st.session_state.processing_result = (df, csv_bytes, processing_info)
                 
                 progress_bar.progress(75)
-                status_text.text("✅ 仕訳データ抽出完了！")
+                status_text.text("✅ 5ページチャンク抽出完了！")
                 progress_bar.progress(100)
                 
                 # プログレスバーを削除
@@ -187,7 +188,7 @@ if uploaded_file is not None:
         if processing_info.get("error"):
             st.warning(f"⚠️ 処理は完了しましたが、一部でエラーが発生しました: {processing_info['error']}")
         else:
-            st.success(f"🎉 変換が完了しました！処理時間: {processing_time:.1f}秒")
+            st.success(f"🎉 自動抽出が完了しました！処理時間: {processing_time:.1f}秒")
         
         # 結果サマリー
         col_result1, col_result2, col_result3 = st.columns(3)
@@ -235,12 +236,21 @@ if uploaded_file is not None:
                 key="display_count"
             )
             
-            # データ表示
+            # データ表示（UI用にマスキング）
+            from utils.masking import mask_personal_info
+            display_df = df.head(display_count).copy()
+            
+            # 摘要列をマスキング（UIのみ、CSV元データは変更せず）
+            if '摘要' in display_df.columns:
+                display_df['摘要'] = display_df['摘要'].apply(lambda x: mask_personal_info(str(x)) if pd.notna(x) else x)
+            
             st.dataframe(
-                df.head(display_count), 
+                display_df, 
                 use_container_width=True,
                 hide_index=True
             )
+            
+            st.caption("※ UI表示では個人識別情報をマスクしています。CSVファイルには元データが保存されます。")
             
             if len(df) > display_count:
                 st.info(f"表示: {display_count}件 / 全{len(df)}件")
@@ -283,13 +293,14 @@ with st.expander("📖 使用方法とヒント"):
     st.markdown("""
     ### 📋 使用手順
     1. **PDFファイル選択**: 仕訳データが含まれるPDFファイルを選択
-    2. **抽出開始**: 「仕訳データ抽出開始」ボタンをクリック
+    2. **自動抽出**: アップロードと同時に自動で抽出開始
     3. **結果確認**: 抽出されたデータをプレビューで確認
-    4. **CSV出力**: 「CSVファイルをダウンロード」でファイル保存
+    4. **CSV出力**: 「ミロク取込45列CSVをダウンロード」でファイル保存
     
     ### 💡 処理のポイント
-    - **ページ別処理**: PDFを1ページずつ精密に分析・処理
+    - **5ページチャンク処理**: PDFを5ページずつ安定的に分析・処理
     - **高精度AI**: Claude Sonnet 4.0の視覚認識で正確な仕訳抽出
+    - **自動化**: アップロードと同時に抽出開始、ワンクリック操作
     - **日本語対応**: 日本の会計基準に対応した仕訳形式で出力
     
     ### ⚠️ 注意事項

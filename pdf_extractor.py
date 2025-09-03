@@ -120,7 +120,7 @@ class ProductionPDFExtractor:
         
         Args:
             api_key: Anthropic API key (overrides config if provided)
-            use_mock: Use mock data (overrides config if provided)
+            use_mock: Deprecated parameter (ignored, always uses production API)
         """
         # Claude Sonnet 4.0専用
         self.api_provider = 'anthropic'
@@ -128,12 +128,11 @@ class ProductionPDFExtractor:
         self.model_name = config.ANTHROPIC_MODEL
         self.max_tokens = config.ANTHROPIC_MAX_TOKENS
             
-        self.use_mock = use_mock if use_mock is not None else config.USE_MOCK_DATA
+        self.use_mock = False  # モックモード完全撤廃
         
-        # Initialize API client if not using mock
+        # Initialize API client (always for production)
         self.client = None
-        if not self.use_mock:
-            self._initialize_api_client()
+        self._initialize_api_client()
         
         # Processing settings
         self.max_retries = config.MAX_RETRIES
@@ -144,8 +143,8 @@ class ProductionPDFExtractor:
         self.max_concurrent_requests = config.MAX_CONCURRENT_REQUESTS
         self.worker_pool_size = config.WORKER_POOL_SIZE
         
-        # File processing settings
-        self.pages_per_split = config.PAGES_PER_SPLIT
+        # File processing settings - 5ページ単位で安定化
+        self.pages_per_split = 5
         self.max_file_size = config.MAX_FILE_SIZE_MB * 1024 * 1024  # Convert to bytes
         
         # Security settings
@@ -421,11 +420,7 @@ class ProductionPDFExtractor:
         filename = pdf_path.name
         page_range = f"{page_start}-{page_end}"
         
-        logger.info(f"Extracting: {filename} (pages {page_range})")
-        
-        if self.use_mock:
-            logger.info("Using mock data")
-            return self.get_enhanced_mock_data(filename, page_range)
+        logger.info(f"Extracting: {filename} (pages {page_range}) [本番API使用]")
         
         # Create extraction task with timeout
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -447,14 +442,12 @@ class ProductionPDFExtractor:
                 logger.warning(f"No images extracted from {filename}")
                 return []
             
-            # Prepare prompt
-            prompt = self._get_enhanced_prompt_template().format(
-                filename=filename,
-                page_range=page_range
-            )
+            # Systemプロンプト使用（固定化）
+            system_prompt = self._get_system_prompt()
+            user_prompt = f"ファイル名: {filename}, ページ: {page_range}"
             
             # Claude Sonnet 4.0 API呼び出し（JSON抽出ガード付き）
-            response_text, cost_usd = self._call_claude_api(prompt, images_b64)
+            response_text, cost_usd = self._call_claude_api(system_prompt, user_prompt, images_b64)
             
             # JSON抽出ガードを使用してパース
             from utils.json_guard import parse_5cols_json, get_fallback_entry
@@ -466,8 +459,8 @@ class ProductionPDFExtractor:
                 # 1回のみリトライ（短縮プロンプト）
                 logger.info("短縮プロンプトで1回リトライ")
                 try:
-                    retry_prompt = "出力はJSON配列のみ。各要素は5カラム（伝票日付/借貸区分/科目名/金額/摘要）。余計な文字・コードフェンス禁止。"
-                    retry_response, retry_cost = self._call_claude_api(retry_prompt, images_b64)
+                    retry_system = "出力はJSON配列のみ。各要素は5カラム（伝票日付/借貸区分/科目名/金額/摘要）。余計な文字・コードフェンス禁止。"
+                    retry_response, retry_cost = self._call_claude_api(retry_system, user_prompt, images_b64)
                     cost_usd += retry_cost
                     extracted_data = parse_5cols_json(retry_response)
                     logger.info(f"リトライ成功: {len(extracted_data)}エントリ")
@@ -501,20 +494,8 @@ class ProductionPDFExtractor:
         Returns:
             str: マスキング後のテキスト
         """
-        import re
-        
-        if not text:
-            return text
-            
-        # 氏名のマスキング（カタカナ・ひらがな・漢字の人名パターン）
-        # 例: "山下良三" -> "山***", "タナカ" -> "タ**"
-        name_pattern = r'([\u4e00-\u9faf\u3040-\u309f\u30a0-\u30ff]{2,4})(?=[\s\u3000\u3001\u3002,.:;]|$)'
-        text = re.sub(name_pattern, lambda m: m.group(1)[0] + '*' * (len(m.group(1)) - 1), text)
-        
-        # 住所の一部マスキング（町名・番地）
-        text = re.sub(r'(\d+)[-－](\d+)[-－](\d+)', r'***-***-***', text)
-        
-        return text
+        from utils.masking import mask_personal_info
+        return mask_personal_info(text)
         
     def _sanitize_extracted_data_for_logging(self, data: List[Dict]) -> List[Dict]:
         """
@@ -526,26 +507,16 @@ class ProductionPDFExtractor:
         Returns:
             List[Dict]: マスキング後のデータ
         """
-        if not data:
-            return []
-            
-        sanitized = []
-        for entry in data[:2]:  # 最初の2件のみ
-            sanitized_entry = entry.copy()
-            # 摘要のマスキング
-            if '摘要' in sanitized_entry:
-                sanitized_entry['摘要'] = self._sanitize_for_logging(sanitized_entry['摘要'])
-            sanitized.append(sanitized_entry)
-            
-        return sanitized
+        from utils.masking import mask_list_for_logging
+        return mask_list_for_logging(data, sample_size=2)
     
-    def _call_claude_api(self, prompt: str, images_b64: List[str]) -> Tuple[str, float]:
-        """Call Claude Sonnet 4.0 API with images"""
+    def _call_claude_api(self, system_prompt: str, user_prompt: str, images_b64: List[str]) -> Tuple[str, float]:
+        """Call Claude Sonnet 4.0 API with system prompt and images"""
         try:
-            # Build message
+            # Build user message
             message = {
                 "role": "user",
-                "content": [{"type": "text", "text": prompt}]
+                "content": [{"type": "text", "text": user_prompt}]
             }
             
             # Add images
@@ -566,6 +537,7 @@ class ProductionPDFExtractor:
                 model=self.model_name,
                 max_tokens=4096,  # 安定化: 切断を避ける
                 temperature=0,    # 安定化: 精度重視、再現性確保
+                system=system_prompt,  # Systemプロンプトをシステムに設定
                 messages=[message],
                 timeout=self.request_timeout
                 # stop_sequences削除: JSONが途中切れするのを防ぐため
@@ -760,8 +732,8 @@ class ProductionPDFExtractor:
         
         return mock_entries
     
-    def _get_enhanced_prompt_template(self) -> str:
-        """Get enhanced prompt template with precision-focused auditor persona"""
+    def _get_system_prompt(self) -> str:
+        """固定システムプロンプト（精度重視・監査人視点）"""
         return """あなたは「会計監査人の補助AI」です。帳票PDFのOCR結果を精査し、仕訳の正確性を保証する役割を持ちます。出力は必ず**JSON配列のみ**（説明・表・コードフェンス等すべて禁止）。各要素=1仕訳レッグ、次の5カラムを必ず含めてください。
 
 【出力カラム（順序固定）】
@@ -909,8 +881,8 @@ class ProductionPDFExtractor:
                 page_start = i * pages_per_split + 1
                 page_end = (i + 1) * pages_per_split
             
-            # Rate limiting
-            if not self.use_mock and i > 0:
+            # Rate limiting (本番API使用時)
+            if i > 0:
                 time.sleep(self.api_interval)
             
             extracted_data = self.extract_with_retry(split_file, page_start, page_end)
@@ -947,9 +919,8 @@ class ProductionPDFExtractor:
                 future = executor.submit(self.extract_with_retry, split_file, page_start, page_end)
                 futures.append((future, split_file.name))
                 
-                # Rate limiting for concurrent requests
-                if not self.use_mock:
-                    time.sleep(self.api_interval / self.max_concurrent_requests)
+                # Rate limiting for concurrent requests (本番API使用時)
+                time.sleep(self.api_interval / self.max_concurrent_requests)
             
             # Collect results
             for future, filename in futures:

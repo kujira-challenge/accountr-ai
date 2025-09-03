@@ -45,10 +45,10 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
             
             logger.info(f"PDF saved temporarily to: {pdf_path}")
             
-            # PDF抽出器を初期化（Claude Sonnet 4.0使用）
+            # PDF抽出器を初期化（Claude Sonnet 4.0使用、常に本番API）
             extractor = ProductionPDFExtractor(
                 api_key=config.ANTHROPIC_API_KEY,
-                use_mock=config.USE_MOCK_DATA
+                use_mock=False  # モックモード完全撤廃
             )
             
             # PDF処理実行
