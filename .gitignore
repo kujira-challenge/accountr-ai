@@ -37,6 +37,7 @@ logs/
 debug_outputs/
 *.log
 *.csv
+!勘定科目コード一覧.csv
 *.xlsx
 *.json
 !requirements.json
