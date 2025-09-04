@@ -105,9 +105,29 @@ def parse_5cols_json(text: str) -> List[Dict]:
         # 2. JSONパース
         parsed_data = json.loads(json_str)
         
+        # DEBUG: 実際のClaude APIレスポンス構造をログ出力
+        logger.error(f"DEBUG - parsed_data type: {type(parsed_data)}")
+        if isinstance(parsed_data, list) and len(parsed_data) > 0:
+            logger.error(f"DEBUG - first element type: {type(parsed_data[0])}")
+            logger.error(f"DEBUG - first element content: {parsed_data[0]}")
+            if isinstance(parsed_data[0], list) and len(parsed_data[0]) > 0:
+                logger.error(f"DEBUG - first nested element: {parsed_data[0][0]}")
+        
         # 3. リスト型チェック
         if not isinstance(parsed_data, list):
             raise ValueError(f"JSON配列である必要があります: {type(parsed_data)}")
+        
+        # HOTFIX: If Claude API returns nested array, flatten it
+        if isinstance(parsed_data, list) and len(parsed_data) > 0 and isinstance(parsed_data[0], list):
+            logger.warning("Detected nested array structure - flattening...")
+            flattened_data = []
+            for subarray in parsed_data:
+                if isinstance(subarray, list):
+                    flattened_data.extend(subarray)
+                else:
+                    flattened_data.append(subarray)
+            parsed_data = flattened_data
+            logger.info(f"Flattened array: {len(parsed_data)} entries")
         
         # 4. 各要素の5カラムチェック
         validated_data = []
