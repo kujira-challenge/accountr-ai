@@ -312,6 +312,40 @@ class MJSConverter:
         except (ValueError, TypeError):
             return 0
     
+    def _extract_side_from_memo(self, memo: str, side: str) -> str:
+        """摘要からサイド別の科目名を抽出"""
+        # side = "借方" or "貸方"
+        m = re.search(rf"{side}:([^\s/]+)", memo or "")
+        return m.group(1).strip() if m else ""
+
+    def _decide_account_name(self, entry: Dict[str, Any]) -> str:
+        """科目名の決定ロジック（空なら摘要からサイド別に拾う）"""
+        # もともとの科目名
+        name = (entry.get("科目名") or "").strip()
+        if name:
+            return name
+        # 空なら摘要からサイド別に拾う
+        side = entry.get("借貸区分", "")
+        if side == "借方":
+            return self._extract_side_from_memo(entry.get("摘要", ""), "借方")
+        if side == "貸方":
+            return self._extract_side_from_memo(entry.get("摘要", ""), "貸方")
+        return ""  # 念のため
+
+    def normalize_alias(self, name: str) -> str:
+        """表記ゆれの正規化（最小セット）"""
+        ALIAS = {
+            "西京普通": "普通預金Ｂ",
+            "三菱普通": "普通預金Ｃ",
+            "売上": "売上高",
+            "退居営繕費": "修繕費",
+            "退去営繕費": "修繕費",
+            "預り敷金": "敷金",
+            "退居敷金": "敷金",
+        }
+        n = (name or "").strip()
+        return ALIAS.get(n, n)
+
     def create_mjs_row(self, entry: Dict[str, Any]) -> Dict[str, str]:
         """5カラムJSONエントリから45列の行を作成"""
         # 45列の空行を作成
@@ -323,8 +357,9 @@ class MJSConverter:
         row["消費税額"] = "0"  # 固定値
         row["摘要"] = str(entry.get("摘要", ""))
         
-        # 科目コードの補完
-        account_name = str(entry.get("科目名", "")).strip()
+        # 科目名の決定と正規化
+        account_name = self._decide_account_name(entry)  # A: 摘要からサイド別に拾う
+        account_name = self.normalize_alias(account_name)  # B: エイリアスで名寄せ
         account_code, aux_code = self.lookup_account_code(account_name)
         
         # 未割当の場合は摘要に【科目コード要確認】を追記
