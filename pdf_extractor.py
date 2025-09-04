@@ -553,16 +553,54 @@ class ProductionPDFExtractor:
             
             logger.info(f"Making Claude API call with model: {self.model_name}")
             
-            # Make API call with stabilized settings
-            response = self.client.messages.create(
-                model=self.model_name,
-                max_tokens=4096,  # 安定化: 切断を避ける
-                temperature=0,    # 安定化: 精度重視、再現性確保
-                system=system_prompt,  # Systemプロンプトをシステムに設定
-                messages=[message],
-                timeout=self.request_timeout
-                # stop_sequences削除: JSONが途中切れするのを防ぐため
-            )
+            # JSON Schema for forced object array output
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "five_columns",
+                    "schema": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["伝票日付", "借貸区分", "科目名", "金額", "摘要"],
+                            "properties": {
+                                "伝票日付": {"type": "string"},
+                                "借貸区分": {"type": "string", "enum": ["借方", "貸方"]},
+                                "科目名": {"type": "string"},
+                                "金額": {"type": ["string", "number"]},
+                                "摘要": {"type": "string"}
+                            },
+                            "additionalProperties": False
+                        }
+                    }
+                }
+            }
+            
+            # Make API call with stabilized settings + JSON Schema
+            try:
+                response = self.client.messages.create(
+                    model=self.model_name,
+                    max_tokens=4096,  # 安定化: 切断を避ける
+                    temperature=0,    # 安定化: 精度重視、再現性確保
+                    system=system_prompt,  # Systemプロンプトをシステムに設定
+                    messages=[message],
+                    timeout=self.request_timeout,
+                    response_format=response_format  # JSON Schema強制（Claude Sonnet 4.0対応）
+                    # stop_sequences削除: JSONが途中切れするのを防ぐため
+                )
+                logger.info("JSON Schema強制モード: 成功")
+            except Exception as schema_error:
+                logger.warning(f"JSON Schema非対応 - 従来モードで続行: {schema_error}")
+                # Fallback to normal API call without response_format
+                response = self.client.messages.create(
+                    model=self.model_name,
+                    max_tokens=4096,  # 安定化: 切断を避ける
+                    temperature=0,    # 安定化: 精度重視、再現性確保
+                    system=system_prompt,  # Systemプロンプトをシステムに設定
+                    messages=[message],
+                    timeout=self.request_timeout
+                    # stop_sequences削除: JSONが途中切れするのを防ぐため
+                )
             
             # usage 情報をログに追加と費用計算
             cost_usd = 0.0
@@ -754,15 +792,21 @@ class ProductionPDFExtractor:
         return mock_entries
     
     def _get_system_prompt(self) -> str:
-        """強化システムプロンプト（貸借ペア保証・摘要統一）"""
-        return """あなたは「帳票OCR変換器（監査人視点）」です。A4の不動産伝票PDF（退去・振替・更新・新規など）から【5カラムJSON配列】を出力してください。
+        """強化システムプロンプト（オブジェクト配列強制・貸借ペア保証・摘要統一）"""
+        return """あなたは「帳票OCR変換器（監査人視点）」です。A4の不動産伝票PDF（退去・振替・更新・新規など）から【オブジェクトの配列】をJSON形式で出力してください。
 
-【出力カラム（順序固定）】
-1) 伝票日付（YYYY/M/D、西暦）
-2) 借貸区分（借方 / 貸方）
-3) 科目名（不明なら空文字でよい）
-4) 金額（半角数字、正整数）
-5) 摘要（共通摘要＋行固有＋「; 借方:XXX / 貸方:YYY」）
+【出力形式（厳守）】
+- 出力は JSON で、**オブジェクト（辞書）の配列**のみ。
+- 各オブジェクトは **必須5キー**：["伝票日付","借貸区分","科目名","金額","摘要"]
+- 5要素の配列やタプルで返してはならない。必ず { "伝票日付": "...", "借貸区分": "...", "科目名": "...", "金額": ..., "摘要": "..." } の形。
+- 余計な説明文・コードフェンスは禁止。
+
+【出力カラム（5キー必須）】
+1) "伝票日付"（YYYY/M/D、西暦文字列）
+2) "借貸区分"（"借方" または "貸方"）
+3) "科目名"（不明なら空文字でよい）
+4) "金額"（半角数字、正整数）
+5) "摘要"（共通摘要＋行固有＋「; 借方:XXX / 貸方:YYY」）
 
 【レイアウトの絶対則】
 - 伝票は「左=借方／右=貸方」。中央に共通摘要。
@@ -776,10 +820,10 @@ class ProductionPDFExtractor:
 - 物件名・号室・契約者名・オーナー名・○月分賃料など、中央の枠単位の情報は、同枠の全レッグに継承する。
 - 枠内で不一致がある場合は情報量の多いものを採用。不確実なら摘要末尾に【OCR注意:目視確認推奨】。
 
-【形式】
-- 出力は JSON 配列のみ。余計な説明文は禁止。
+【フォールバック】
+- 抽出不能でも配列1要素は必ず返す（科目名空、摘要末尾に【OCR注意】）。
 - 金額に負数や記号は使わない。
-- フォールバック：抽出不能でも配列1要素は必ず返す（科目名空、摘要末尾に【OCR注意】）。"""
+- 出力例: [{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"抽出不能【OCR注意】"}]"""
     
     def process_single_pdf(self, pdf_path: Path, temp_dir: Path, pages_per_split: Optional[int] = None) -> ProcessingResult:
         """

@@ -13,6 +13,58 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 REQUIRED_5_COLUMNS = ["伝票日付", "借貸区分", "科目名", "金額", "摘要"]
+FIVE_KEYS = ["伝票日付", "借貸区分", "科目名", "金額", "摘要"]
+
+def _list5_to_dict5(item):
+    """5要素配列を5キー辞書にマッピング"""
+    try:
+        if not isinstance(item, list) or len(item) != 5:
+            return None
+        return dict(zip(FIVE_KEYS, [str(item[0]), str(item[1]), str(item[2]), str(item[3]), str(item[4])]))
+    except Exception as e:
+        logger.warning(f"配列→辞書変換失敗: {e}")
+        return None
+
+def _validate_and_normalize(entries: List[Dict]) -> List[Dict]:
+    """エントリのバリデーションと正規化"""
+    validated_data = []
+    
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            logger.warning(f"エントリ{i}が辞書型ではありません: {type(entry)}")
+            continue
+        
+        # 必須カラムの存在チェック
+        missing_cols = [col for col in REQUIRED_5_COLUMNS if col not in entry]
+        if missing_cols:
+            logger.warning(f"エントリ{i}に必須カラムが不足: {missing_cols}")
+            # 不足カラムを補完
+            for col in missing_cols:
+                entry[col] = "" if col != "金額" else 0
+        
+        # 金額の型チェック
+        try:
+            amount = entry.get("金額", 0)
+            if isinstance(amount, str):
+                amount = amount.replace(",", "").replace(" ", "")
+            entry["金額"] = int(float(amount)) if amount else 0
+        except (ValueError, TypeError):
+            logger.warning(f"エントリ{i}の金額が無効: {entry.get('金額')}")
+            entry["金額"] = 0
+        
+        validated_data.append(entry)
+    
+    return validated_data
+
+def _get_fallback_entry() -> List[Dict]:
+    """フォールバック用の1エントリ（空出力禁止）"""
+    return [{
+        "伝票日付": "",
+        "借貸区分": "借方",
+        "科目名": "",
+        "金額": 0,
+        "摘要": "抽出不能【OCR注意:目視確認推奨】"
+    }]
 
 def extract_json_array_str(text: str) -> str:
     """
@@ -86,98 +138,77 @@ def extract_json_array_str(text: str) -> str:
 
 def parse_5cols_json(text: str) -> List[Dict]:
     """
-    LLM生応答から5カラムJSON配列を安全に抽出・パース
+    防御的5カラムJSONパーサー - 配列→辞書マッピング＋ゼロ件フォールバック対応
     
     Args:
         text: LLMの生レスポンステキスト
         
     Returns:
-        List[Dict]: パースされた5カラムJSONリスト
-        
-    Raises:
-        ValueError: パースに失敗した場合
-        KeyError: 必須カラムが不足している場合
+        List[Dict]: パースされた5カラムJSONリスト（最低1件保証）
     """
     try:
-        # EMERGENCY DEBUG: Show raw response
-        logger.error(f"EMERGENCY DEBUG - Raw Claude response (first 2000 chars): {text[:2000]}")
-        logger.error(f"EMERGENCY DEBUG - Raw Claude response (last 500 chars): {text[-500:]}")
-        # 1. JSON配列文字列を抽出
+        logger.info("防御的パーサー開始: Claude APIレスポンス解析")
+        
+        # 1. JSON文字列を抽出
         json_str = extract_json_array_str(text)
-        logger.error(f"EMERGENCY DEBUG - Extracted JSON string: {json_str[:1000]}...")
+        logger.debug(f"抽出JSON文字列 (先頭500文字): {json_str[:500]}")
         
         # 2. JSONパース
         parsed_data = json.loads(json_str)
+        logger.info(f"JSONパース成功: トップレベルの型 = {type(parsed_data)}")
         
-        # DEBUG: 実際のClaude APIレスポンス構造をログ出力
-        logger.error(f"DEBUG - parsed_data type: {type(parsed_data)}")
-        if isinstance(parsed_data, list) and len(parsed_data) > 0:
-            logger.error(f"DEBUG - first element type: {type(parsed_data[0])}")
-            logger.error(f"DEBUG - first element content: {parsed_data[0]}")
-            if isinstance(parsed_data[0], list) and len(parsed_data[0]) > 0:
-                logger.error(f"DEBUG - first nested element: {parsed_data[0][0]}")
+        # 3. データ正規化（辞書・オブジェクト形式・配列形式すべて受け入れ）
+        items = []
         
-        # 3. リスト型チェック
-        if not isinstance(parsed_data, list):
-            raise ValueError(f"JSON配列である必要があります: {type(parsed_data)}")
+        if isinstance(parsed_data, dict) and "entries" in parsed_data and isinstance(parsed_data["entries"], list):
+            # {"entries": [...]} 形式
+            items = parsed_data["entries"]
+            logger.info("検出: entries キー付きオブジェクト形式")
+        elif isinstance(parsed_data, list):
+            # 配列直接形式
+            items = parsed_data
+            logger.info("検出: 配列直接形式")
+        else:
+            logger.warning(f"予期しない形式: {type(parsed_data)}")
+            items = []
         
-        # HOTFIX: If Claude API returns nested array, flatten it
-        if isinstance(parsed_data, list) and len(parsed_data) > 0 and isinstance(parsed_data[0], list):
-            logger.warning("Detected nested array structure - flattening...")
-            flattened_data = []
-            for subarray in parsed_data:
-                if isinstance(subarray, list):
-                    flattened_data.extend(subarray)
+        # 4. エントリ正規化（辞書・5要素配列の両方を受け入れ）
+        normalized = []
+        for i, item in enumerate(items):
+            if isinstance(item, dict):
+                # 既に辞書形式
+                normalized.append(item)
+                logger.debug(f"エントリ{i}: 辞書形式 - OK")
+            elif isinstance(item, list) and len(item) == 5:
+                # 5要素配列 → 辞書へマッピング
+                mapped = _list5_to_dict5(item)
+                if mapped:
+                    normalized.append(mapped)
+                    logger.info(f"エントリ{i}: 5要素配列 → 辞書変換成功")
                 else:
-                    flattened_data.append(subarray)
-            parsed_data = flattened_data
-            logger.info(f"Flattened array: {len(parsed_data)} entries")
+                    logger.warning(f"エントリ{i}: 5要素配列の変換失敗")
+            else:
+                logger.warning(f"エントリ{i}が辞書型でも5要素配列でもありません: {type(item)}, length={len(item) if hasattr(item, '__len__') else 'N/A'}")
         
-        # 4. 各要素の5カラムチェック
-        validated_data = []
-        for i, entry in enumerate(parsed_data):
-            if not isinstance(entry, dict):
-                logger.warning(f"エントリ{i}が辞書型ではありません: {type(entry)}")
-                # EMERGENCY DEBUG: Show the actual content
-                logger.error(f"EMERGENCY DEBUG - エントリ{i}の内容: {entry}")
-                continue
-            
-            # 必須カラムの存在チェック
-            missing_cols = [col for col in REQUIRED_5_COLUMNS if col not in entry]
-            if missing_cols:
-                logger.warning(f"エントリ{i}に必須カラムが不足: {missing_cols}")
-                # 不足カラムを補完
-                for col in missing_cols:
-                    entry[col] = "" if col != "金額" else 0
-            
-            # 金額の型チェック
-            try:
-                amount = entry.get("金額", 0)
-                if isinstance(amount, str):
-                    amount = amount.replace(",", "").replace(" ", "")
-                entry["金額"] = int(float(amount)) if amount else 0
-            except (ValueError, TypeError):
-                logger.warning(f"エントリ{i}の金額が無効: {entry.get('金額')}")
-                entry["金額"] = 0
-            
-            validated_data.append(entry)
+        # 5. バリデーション・正規化
+        validated = _validate_and_normalize(normalized)
         
-        logger.info(f"5カラムJSONパース成功: {len(validated_data)}エントリ")
+        # 6. ゼロ件フォールバック（空出力禁止）
+        if not validated:
+            logger.warning("有効エントリ0件 - フォールバック適用")
+            validated = _get_fallback_entry()
         
-        # デバッグ用：LLM生応答の冒頭末尾を保存（最大8KB）
-        sanitized_text = text[:8000] if len(text) > 8000 else text
-        logger.debug(f"LLM生応答（冒頭～末尾8KB）: {sanitized_text}")
-        
-        return validated_data
+        logger.info(f"防御的パーサー完了: {len(validated)}エントリ確定")
+        return validated
         
     except json.JSONDecodeError as e:
-        logger.error(f"JSON抽出失敗 - 原因: JSONパース失敗 - {e}")
-        logger.debug(f"パース失敗テキスト（先頭500文字）: {text[:500]}...")
-        raise ValueError(f"JSONパースエラー: {e}")
+        logger.error(f"JSON抽出失敗 - パース失敗: {e}")
+        logger.debug(f"失敗テキスト（先頭500文字）: {text[:500]}")
+        return _get_fallback_entry()
     except Exception as e:
-        logger.error(f"JSON抽出失敗 - 原因: その他エラー - {type(e).__name__}: {e}")
-        logger.debug(f"エラー発生テキスト（先頭500文字）: {text[:500]}...")
-        raise ValueError(f"5カラムJSON抽出エラー: {e}")
+        logger.error(f"防御的パーサーでエラー: {type(e).__name__}: {e}")
+        logger.debug(f"エラー時テキスト（先頭500文字）: {text[:500]}")
+        return _get_fallback_entry()
 
 def get_fallback_entry(error_msg: str = "抽出不能") -> List[Dict]:
     """
