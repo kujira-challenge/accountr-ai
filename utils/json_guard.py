@@ -99,8 +99,12 @@ def parse_5cols_json(text: str) -> List[Dict]:
         KeyError: 必須カラムが不足している場合
     """
     try:
+        # EMERGENCY DEBUG: Show raw response
+        logger.error(f"EMERGENCY DEBUG - Raw Claude response (first 2000 chars): {text[:2000]}")
+        logger.error(f"EMERGENCY DEBUG - Raw Claude response (last 500 chars): {text[-500:]}")
         # 1. JSON配列文字列を抽出
         json_str = extract_json_array_str(text)
+        logger.error(f"EMERGENCY DEBUG - Extracted JSON string: {json_str[:1000]}...")
         
         # 2. JSONパース
         parsed_data = json.loads(json_str)
@@ -134,6 +138,8 @@ def parse_5cols_json(text: str) -> List[Dict]:
         for i, entry in enumerate(parsed_data):
             if not isinstance(entry, dict):
                 logger.warning(f"エントリ{i}が辞書型ではありません: {type(entry)}")
+                # EMERGENCY DEBUG: Show the actual content
+                logger.error(f"EMERGENCY DEBUG - エントリ{i}の内容: {entry}")
                 continue
             
             # 必須カラムの存在チェック
