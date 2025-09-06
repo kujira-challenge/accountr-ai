@@ -475,7 +475,8 @@ class ProductionPDFExtractor:
             
             # 後処理: 貸借ペア保証と金額バリデーション
             from utils.postprocess import postprocess_extracted_data
-            extracted_data, error_entries = postprocess_extracted_data(extracted_data)
+            from config import config
+            extracted_data, error_entries = postprocess_extracted_data(extracted_data, config)
             
             if error_entries:
                 logger.warning(f"Post-processing found {len(error_entries)} error entries (zero amounts, etc.)")

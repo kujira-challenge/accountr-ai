@@ -535,6 +535,17 @@ def fivejson_to_mjs45(
         # 5. バリデーション
         converter.validate_and_warn(mjs_data)
         
+        # 5.5 両コード空の行を除去（POSTPROCESS設定に応じて）
+        from config import config
+        if hasattr(config, 'POSTPROCESS') and config.POSTPROCESS.DROP_BOTH_CODE_EMPTY:
+            rows_before = len(mjs_data)
+            mjs_data = [row for row in mjs_data if not (
+                row.get("（借）科目ｺｰﾄﾞ", "") == "" and row.get("（貸）科目ｺｰﾄﾞ", "") == ""
+            )]
+            rows_dropped = rows_before - len(mjs_data)
+            if rows_dropped > 0:
+                logger.info(f"Dedup/BothEmpty: dropped={rows_dropped} rows with both debit and credit codes empty")
+        
         # 6. CSVファイルの保存
         logger.info(f"Saving CSV to: {out_csv_path}")
         

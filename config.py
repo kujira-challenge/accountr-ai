@@ -146,6 +146,13 @@ class Config:
     VALIDATE_ACCOUNT_NAMES = os.getenv('VALIDATE_ACCOUNT_NAMES', 'true').lower() == 'true'
     
     # ==================================================
+    # Post-Processing Settings
+    # ==================================================
+    class POSTPROCESS:
+        SUM_TOLERANCE = int(os.getenv('POSTPROCESS_SUM_TOLERANCE', '0'))
+        DROP_BOTH_CODE_EMPTY = os.getenv('POSTPROCESS_DROP_BOTH_CODE_EMPTY', 'true').lower() == 'true'
+    
+    # ==================================================
     # Error Handling
     # ==================================================
     ENABLE_RETRY = os.getenv('ENABLE_RETRY', 'true').lower() == 'true'  # 1回リトライ有効
