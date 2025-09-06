@@ -9,7 +9,7 @@ import re
 import logging
 from collections import defaultdict
 from typing import List, Dict, Any, Tuple
-from utils.postprocess_dedupe import deduplicate_entries
+from utils.reconcile_dedupe import reconcile_and_dedupe
 
 logger = logging.getLogger(__name__)
 
@@ -185,11 +185,11 @@ def postprocess_extracted_data(entries: List[Dict[str, Any]], config=None) -> Tu
     
     1. 貸借ペア保証
     2. 金額バリデーション
-    3. 重複除去（合算行除去・完全重複統合）
+    3. 重複除去と残高調整（合算行除去・one-vs-many分割）
     
     Args:
         entries: LLM抽出後の生データ
-        config: 設定オブジェクト（POSTPROCESS.SUM_TOLERANCE用）
+        config: 設定オブジェクト（将来の設定拡張用）
         
     Returns:
         Tuple[processed_entries, error_entries]: (処理済みデータ, エラーデータ)
@@ -202,12 +202,9 @@ def postprocess_extracted_data(entries: List[Dict[str, Any]], config=None) -> Tu
     # 2. 金額バリデーション
     valid_entries, error_entries = validate_amounts(paired_entries)
     
-    # 3. 重複除去（合算行・完全重複）
+    # 3. 重複除去と残高調整（合算行・分割処理）
     if valid_entries:
-        sum_tolerance = 0
-        if config and hasattr(config, 'POSTPROCESS') and hasattr(config.POSTPROCESS, 'SUM_TOLERANCE'):
-            sum_tolerance = config.POSTPROCESS.SUM_TOLERANCE
-        valid_entries = deduplicate_entries(valid_entries, sum_tolerance)
+        valid_entries = reconcile_and_dedupe(valid_entries)
     
     logger.info(f"Post-processing completed: {len(valid_entries)} valid entries, {len(error_entries)} errors")
     
