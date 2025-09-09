@@ -43,6 +43,15 @@ debug_outputs/
 !requirements.json
 !package.json
 
+# Test and Demo Artifacts (prevent re-contamination)
+*_demo.csv
+*_fixed_demo.csv
+*_dedup_demo.csv
+*_test*.csv
+/output/*.csv
+/output/tmp/
+/output/backups/*
+
 # ==================================================
 # PDF Processing Files
 # ==================================================

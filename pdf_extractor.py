@@ -473,10 +473,15 @@ class ProductionPDFExtractor:
                     logger.info(f"JSON抽出失敗 - 原因: リトライ後もパース失敗 ({type(retry_e).__name__})")
                     extracted_data = get_fallback_entry("抽出不能")
             
+            # 5カラムの前段整形（コード列を見ない段階での重複・形状整理）
+            from utils.reconcile_entries import reconcile_entries
+            extracted_data = reconcile_entries(extracted_data, sum_tolerance=0)
+            
             # 後処理: 貸借ペア保証と金額バリデーション
-            from utils.postprocess import postprocess_extracted_data
+            from utils.postprocess import enforce_debit_credit_pairs, validate_amounts
             from config import config
-            extracted_data, error_entries = postprocess_extracted_data(extracted_data, config)
+            paired_entries = enforce_debit_credit_pairs(extracted_data)
+            extracted_data, error_entries = validate_amounts(paired_entries)
             
             if error_entries:
                 logger.warning(f"Post-processing found {len(error_entries)} error entries (zero amounts, etc.)")
@@ -577,31 +582,34 @@ class ProductionPDFExtractor:
                 }
             }
             
-            # Make API call with stabilized settings + JSON Schema
+            # Make API call with stabilized settings (response_format removed for compatibility)
             try:
-                response = self.client.messages.create(
-                    model=self.model_name,
-                    max_tokens=4096,  # 安定化: 切断を避ける
-                    temperature=0,    # 安定化: 精度重視、再現性確保
-                    system=system_prompt,  # Systemプロンプトをシステムに設定
-                    messages=[message],
-                    timeout=self.request_timeout,
-                    response_format=response_format  # JSON Schema強制（Claude Sonnet 4.0対応）
-                    # stop_sequences削除: JSONが途中切れするのを防ぐため
-                )
-                logger.info("JSON Schema強制モード: 成功")
-            except Exception as schema_error:
-                logger.warning(f"JSON Schema非対応 - 従来モードで続行: {schema_error}")
-                # Fallback to normal API call without response_format
-                response = self.client.messages.create(
-                    model=self.model_name,
-                    max_tokens=4096,  # 安定化: 切断を避ける
-                    temperature=0,    # 安定化: 精度重視、再現性確保
-                    system=system_prompt,  # Systemプロンプトをシステムに設定
-                    messages=[message],
-                    timeout=self.request_timeout
-                    # stop_sequences削除: JSONが途中切れするのを防ぐため
-                )
+                # Try with response_format first (for future compatibility)
+                try:
+                    response = self.client.messages.create(
+                        model=self.model_name,
+                        max_tokens=4096,  # 安定化: 切断を避ける
+                        temperature=0,    # 安定化: 精度重視、再現性確保
+                        system=system_prompt,  # Systemプロンプトをシステムに設定
+                        messages=[message],
+                        timeout=self.request_timeout,
+                        response_format=response_format  # JSON Schema強制（将来対応時）
+                    )
+                    logger.info("JSON Schema強制モード: 成功")
+                except (TypeError, AttributeError) as schema_error:
+                    logger.info(f"JSON Schema非対応 - 従来モードで続行: {type(schema_error).__name__}")
+                    # Fallback to normal API call without response_format
+                    response = self.client.messages.create(
+                        model=self.model_name,
+                        max_tokens=4096,  # 安定化: 切断を避ける
+                        temperature=0,    # 安定化: 精度重視、再現性確保
+                        system=system_prompt,  # Systemプロンプトをシステムに設定
+                        messages=[message],
+                        timeout=self.request_timeout
+                    )
+            except Exception as e:
+                logger.error(f"Claude API call failed: {e}")
+                raise
             
             # usage 情報をログに追加と費用計算
             cost_usd = 0.0
@@ -799,8 +807,8 @@ class ProductionPDFExtractor:
 【出力形式（厳守）】
 - 出力は JSON で、**オブジェクト（辞書）の配列**のみ。
 - 各オブジェクトは **必須5キー**：["伝票日付","借貸区分","科目名","金額","摘要"]
-- 5要素の配列やタプルで返してはならない。必ず { "伝票日付": "...", "借貸区分": "...", "科目名": "...", "金額": ..., "摘要": "..." } の形。
-- 余計な説明文・コードフェンスは禁止。
+- ★重要★ 5要素の配列 ["2024/1/1", "借方", "現金", 1000, "摘要"] やタプルで返してはならない。必ず { "伝票日付": "...", "借貸区分": "...", "科目名": "...", "金額": ..., "摘要": "..." } の辞書オブジェクト形式。
+- 余計な説明文・コードフェンス・markdown記法は一切禁止。
 
 【出力カラム（5キー必須）】
 1) "伝票日付"（YYYY/M/D、西暦文字列）

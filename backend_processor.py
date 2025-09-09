@@ -109,34 +109,40 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
                 # 空の45列DataFrame作成
                 df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
             
-            # 最終整形処理（CSV直前） - reconcile_final適用
+            # 最終整形処理（CSV直前） - 両コード空除去とCSV重複削除のみ
             if not df.empty:
                 try:
-                    from utils.reconcile_final import reconcile_final
+                    from utils.finalize_csv import finalize_csv_rows
                     
                     # DataFrameを辞書リストに変換
-                    entries = df.to_dict('records')
-                    logger.info(f"Starting final reconciliation for {len(entries)} entries")
+                    csv_rows = df.to_dict('records')
+                    original_count = len(csv_rows)
+                    logger.info(f"Starting final CSV cleanup for {original_count} rows")
                     
-                    # 最終整形実行
-                    reconciled_entries = reconcile_final(entries, drop_neutral=True, sum_tolerance=0)
+                    # 両コード空除去と重複除去
+                    finalized_rows = finalize_csv_rows(csv_rows)
                     
                     # 整形後のDataFrameに変換
-                    if reconciled_entries:
-                        df = pd.DataFrame(reconciled_entries)
+                    if finalized_rows:
+                        df = pd.DataFrame(finalized_rows)
                         # 必要な列が不足している場合は補完
                         for col in MJSConverter.MJS_45_COLUMNS:
                             if col not in df.columns:
                                 df[col] = ""
                         # 列順序を45列形式に合わせる
                         df = df.reindex(columns=MJSConverter.MJS_45_COLUMNS, fill_value="")
-                        logger.info(f"Final reconciliation completed: {len(entries)} -> {len(reconciled_entries)} entries")
+                        
+                        dropped_count = original_count - len(finalized_rows)
+                        if dropped_count > 0:
+                            logger.info(f"Final CSV cleanup: {original_count} -> {len(finalized_rows)} rows (dropped {dropped_count} rows with empty codes)")
+                        else:
+                            logger.info(f"Final CSV cleanup completed: {len(finalized_rows)} rows")
                     else:
-                        logger.warning("Final reconciliation returned no entries")
+                        logger.warning("Final CSV cleanup returned no rows")
                         df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
                         
                 except Exception as e:
-                    logger.error(f"Final reconciliation failed: {e}")
+                    logger.error(f"Final CSV cleanup failed: {e}")
                     # エラー時は元のDataFrameをそのまま使用
                     pass
             
