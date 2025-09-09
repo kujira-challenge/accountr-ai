@@ -109,6 +109,37 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
                 # 空の45列DataFrame作成
                 df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
             
+            # 最終整形処理（CSV直前） - reconcile_final適用
+            if not df.empty:
+                try:
+                    from utils.reconcile_final import reconcile_final
+                    
+                    # DataFrameを辞書リストに変換
+                    entries = df.to_dict('records')
+                    logger.info(f"Starting final reconciliation for {len(entries)} entries")
+                    
+                    # 最終整形実行
+                    reconciled_entries = reconcile_final(entries, drop_neutral=True, sum_tolerance=0)
+                    
+                    # 整形後のDataFrameに変換
+                    if reconciled_entries:
+                        df = pd.DataFrame(reconciled_entries)
+                        # 必要な列が不足している場合は補完
+                        for col in MJSConverter.MJS_45_COLUMNS:
+                            if col not in df.columns:
+                                df[col] = ""
+                        # 列順序を45列形式に合わせる
+                        df = df.reindex(columns=MJSConverter.MJS_45_COLUMNS, fill_value="")
+                        logger.info(f"Final reconciliation completed: {len(entries)} -> {len(reconciled_entries)} entries")
+                    else:
+                        logger.warning("Final reconciliation returned no entries")
+                        df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
+                        
+                except Exception as e:
+                    logger.error(f"Final reconciliation failed: {e}")
+                    # エラー時は元のDataFrameをそのまま使用
+                    pass
+            
             # CSV bytes形式で出力
             csv_buffer = io.StringIO()
             df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
