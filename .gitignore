@@ -45,6 +45,7 @@ debug_outputs/
 
 # Test and Demo Artifacts (prevent re-contamination)
 *_demo.csv
+*_test.csv
 *_fixed_demo.csv
 *_dedup_demo.csv
 *_test*.csv

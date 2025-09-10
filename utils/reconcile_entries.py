@@ -18,14 +18,32 @@ def _side_of(entry):  # 5カラムは借貸区分のみで判定
     s = entry.get("借貸区分","")
     return "D" if s=="借方" else ("C" if s=="貸方" else "N")
 
-def reconcile_entries(entries:list, *, sum_tolerance:int=0)->list:
+def reconcile_entries(entries:list, *, sum_tolerance:int=0, return_metrics:bool=False):
     """
-    5カラムJSON向けの"形の整形"のみを行う。
+    5カラムJSON向けの"形の整形"のみを行う（前段整形）。
       - one-vs-many(片側合算=反対側明細合計) → 合算側を分割
       - 同一サイド内「max = sum(others)±tol」→ 合算行を1本落とす
       - 安全条件の左右入替（借方=普通預金/当座 & 貸方=預り金/敷金 など）
-    科目コード列は一切参照しない（ここで両コード空の除去はしない）。
+    
+    ★重要★ 科目コード列は一切参照しない（ここで両コード空の除去は絶対にしない）。
+    除外はCSV直前（後段整形：finalize_csv）でのみ実施し、空事故を防ぐ。
+    
+    Args:
+        entries: 5カラムJSONエントリリスト
+        sum_tolerance: 合計一致の許容誤差
+        return_metrics: メトリクス返却フラグ
+    
+    Returns:
+        return_metrics=True: (整形後エントリリスト, メトリクス辞書)
+        return_metrics=False: 整形後エントリリスト
     """
+    # メトリクス初期化
+    metrics = {
+        "split_count": 0,      # one-vs-many分割数
+        "swap_count": 0,       # 左右入替数
+        "drop_count": 0        # 合算行落とし数
+    }
+    
     buckets = defaultdict(list)
     for e in entries:
         gid = (_nfkc(e.get("伝票日付","")), _base_memo(e.get("摘要","")))
@@ -46,6 +64,7 @@ def reconcile_entries(entries:list, *, sum_tolerance:int=0)->list:
                 r["摘要"] = _nfkc(r.get("摘要","")) + "【自動是正:左右入替】"
             D = [r for r in rows if _side_of(r)=="D"]
             C = [r for r in rows if _side_of(r)=="C"]
+            metrics["swap_count"] += len(rows)  # 入替対象行数をカウント
 
         sumD = sum(_amt(r.get("金額",0)) for r in D)
         sumC = sum(_amt(r.get("金額",0)) for r in C)
@@ -58,7 +77,9 @@ def reconcile_entries(entries:list, *, sum_tolerance:int=0)->list:
                 nr["金額"] = str(_amt(c.get("金額",0)))
                 nr["摘要"] = _nfkc(base.get("摘要","")) + "【分割(貸方に合わせ)】"
                 out.append(nr)
-            out.extend(C);  continue
+            out.extend(C)
+            metrics["split_count"] += len(C)  # 分割数をカウント
+            continue
 
         if len(C)==1 and len(D)>1 and abs(sumD-sumC)<=sum_tolerance:
             base = C[0]
@@ -67,7 +88,9 @@ def reconcile_entries(entries:list, *, sum_tolerance:int=0)->list:
                 nr["金額"] = str(_amt(d.get("金額",0)))
                 nr["摘要"] = _nfkc(base.get("摘要","")) + "【分割(借方に合わせ)】"
                 out.append(nr)
-            out.extend(D);  continue
+            out.extend(D)
+            metrics["split_count"] += len(D)  # 分割数をカウント
+            continue
 
         # 2-3) 同一サイド内「max = sum(others)」合算落とし
         def drop_sum(rows_side):
@@ -82,8 +105,12 @@ def reconcile_entries(entries:list, *, sum_tolerance:int=0)->list:
                     if "合計" in r.get("摘要","") or "差額補完" in r.get("摘要",""): s+=1
                     return s
                 drop = sorted(cand, key=score, reverse=True)[0]
+                metrics["drop_count"] += 1  # 落とし行数をカウント
                 return [r for r in rows_side if r is not drop]
             return rows_side
 
         out.extend(drop_sum(D)); out.extend(drop_sum(C))
+    
+    if return_metrics:
+        return out, metrics
     return out

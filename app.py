@@ -5,6 +5,10 @@ PDF仕訳抽出システム - Streamlit Web App
 Claude Sonnet 4.0を使用してPDFから会計仕訳データを抽出し、CSV形式で出力
 """
 
+# Initialize logging first
+from logging_config import setup_logging
+setup_logging()
+
 import streamlit as st
 import pandas as pd
 import logging

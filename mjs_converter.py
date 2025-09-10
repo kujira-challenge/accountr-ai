@@ -66,14 +66,21 @@ class MJSConverter:
                 logger.error(f"Account code CSV file not found: {account_code_csv_path}")
                 raise FileNotFoundError(f"Account code CSV file not found: {account_code_csv_path}")
             
-            # Shift-JIS → UTF-8-sig フォールバック読み込み
+            # CP932 → UTF-8-sig 二段トライ（件数ログ強化）
             try:
-                df = pd.read_csv(account_code_csv_path, encoding='shift_jis')
-                logger.info(f"Account code CSV loaded (shift_jis): {len(df)} records")
+                df = pd.read_csv(account_code_csv_path, encoding='cp932')
+                logger.info(f"Account code CSV loaded (cp932): {len(df)} records")
+                encoding_used = "cp932"
             except UnicodeDecodeError:
-                logger.warning("Shift-JIS decode failed, trying UTF-8-sig...")
-                df = pd.read_csv(account_code_csv_path, encoding='utf-8-sig')
-                logger.info(f"Account code CSV loaded (utf-8-sig): {len(df)} records")
+                logger.warning("CP932 decode failed, trying UTF-8-sig...")
+                try:
+                    df = pd.read_csv(account_code_csv_path, encoding='utf-8-sig')
+                    logger.info(f"Account code CSV loaded (utf-8-sig): {len(df)} records")
+                    encoding_used = "utf-8-sig"
+                except Exception as e:
+                    logger.error(f"Both encodings failed: {e}")
+                    logger.warning("名寄せマスタ未適用")
+                    raise
             
             # カラム名の候補を定義（半角カタカナ含む）
             code_candidates = ["科目ｺｰﾄﾞ", "科目コード", "勘定科目コード", "コード"]
@@ -118,11 +125,29 @@ class MJSConverter:
             # エイリアスCSVの読み込み
             self.load_aliases()
             
-            logger.info(f"Account codes loaded: {len(self.account_codes)} entries, aliases: {len(self.alias_map)} entries")
+            # 主要科目の存在チェック（INFO出力）
+            key_accounts = ["普通預金", "当座", "預り金", "敷金", "売上高", "営繕費", "修繕費"]
+            found_accounts = []
+            for key_account in key_accounts:
+                if any(key_account in name for name in self.account_codes.keys()):
+                    found_accounts.append(key_account)
+            
+            logger.info(f"Account codes loaded: {len(self.account_codes)} entries, encoding: {encoding_used}")
+            logger.info(f"Key accounts found: {found_accounts}")
+            logger.info(f"Aliases loaded: {len(self.alias_map)} entries")
+            
+            # マスタ読み込み成功フラグ
+            self._master_loaded = True
             
         except Exception as e:
             logger.error(f"Failed to load account codes: {e}")
-            raise
+            logger.warning("名寄せマスタ未適用")
+            # マスタ読み込み失敗フラグ
+            self._master_loaded = False
+            # 失敗時は空の辞書で続行（全エントリに未適用タグが付く）
+            self.account_codes = {}
+            self.alias_map = {}
+            self.account_name_map = {}
     
     def _find_column(self, columns: List[str], candidates: List[str]) -> Optional[str]:
         """カラム名の候補から実際のカラム名を見つける"""
@@ -365,6 +390,11 @@ class MJSConverter:
         # 未割当の場合は摘要に【科目コード要確認】を追記
         if not account_code and account_name:
             row["摘要"] = (row["摘要"] + " 【科目コード要確認】").strip()
+        
+        # マスタ読み込み失敗時の対応（全エントリに "名寄せマスタ未適用" タグ）
+        if not hasattr(self, '_master_loaded') or not self._master_loaded:
+            if not " 名寄せマスタ未適用" in row["摘要"]:
+                row["摘要"] = (row["摘要"] + " 名寄せマスタ未適用").strip()
         
         # 借貸区分に応じてコードを設定
         debit_credit = str(entry.get("借貸区分", "")).strip()

@@ -1,33 +1,45 @@
 #!/usr/bin/env bash
+# cleanup_outputs.sh - Enhanced cleanup script for accounting journal system
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# 出力系
-OUT_DIR="$ROOT/output"
-BACKUP_DIR="$OUT_DIR/backups"
-TMP_DIR="$OUT_DIR/tmp"
+echo "=== Accounting Journal System Cleanup ==="
+echo "Root directory: $ROOT"
 
-echo "Cleaning up test artifacts and temporary files..."
+# Clean test and demo CSV files
+echo "1. Cleaning test and demo files..."
+find "$ROOT" -name "*_demo.csv" -type f -delete 2>/dev/null || true
+find "$ROOT" -name "*_test.csv" -type f -delete 2>/dev/null || true
+echo "   Test and demo CSV files removed"
 
-# 1) デモ/テスト由来のCSV類を削除
-find "$OUT_DIR" -maxdepth 1 -type f \( \
-  -name '*_demo.csv' -o -name '*_fixed_demo.csv' -o -name '*_dedup_demo.csv' -o -name '*_test*.csv' \
-\) -print -delete 2>/dev/null || true
+# Clean temporary output directories  
+echo "2. Cleaning temporary directories..."
+[ -d "$ROOT/output/tmp" ] && rm -rf "$ROOT/output/tmp" && echo "   output/tmp removed"
+[ -d "$ROOT/logs" ] && rm -rf "$ROOT/logs" && echo "   logs/ removed"
 
-# 2) 一時分割や中間成果物
-[ -d "$TMP_DIR" ] && find "$TMP_DIR" -type f -mtime +1 -print -delete 2>/dev/null || true
-
-# 3) 古いバックアップ（直近7世代だけ残す）
-if [ -d "$BACKUP_DIR" ]; then
-  ls -1t "$BACKUP_DIR"/*.pdf 2>/dev/null | tail -n +8 | xargs -r rm -f || true
+# Backup rotation (keep only 3 most recent)
+echo "3. Managing backup rotation..."
+if [ -d "$ROOT/output" ]; then
+    # Remove old backup directories, keep only 3 most recent
+    ls -dt "$ROOT/output"/backup_* 2>/dev/null | tail -n +4 | xargs -r rm -rf
+    backup_count=$(ls -d "$ROOT/output"/backup_* 2>/dev/null | wc -l)
+    echo "   Backup rotation complete (${backup_count} directories remaining)"
+else
+    echo "   No output directory found"
 fi
 
-# 4) ログのローテーション（7日超は削除）
-[ -d "$ROOT/logs" ] && find "$ROOT/logs" -type f -mtime +7 -print -delete 2>/dev/null || true
-
-# 5) Python cache files
+# Clean Python cache files
+echo "4. Cleaning Python cache..."
 find "$ROOT" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "$ROOT" -name "*.pyc" -delete 2>/dev/null || true
+find "$ROOT" -name "*.pyo" -delete 2>/dev/null || true
+echo "   Python cache files removed"
 
-echo "Cleanup done."
+# Summary
+echo "=== Cleanup Summary ==="
+if [ -d "$ROOT/output" ]; then
+    output_size=$(du -sh "$ROOT/output" 2>/dev/null | cut -f1 || echo "unknown")
+    echo "Output directory size: $output_size"
+fi
+echo "Cleanup completed successfully!"

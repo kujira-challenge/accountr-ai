@@ -6,6 +6,10 @@ PDFファイルを5ページずつ分割してClaude APIで仕訳情報を抽出
 Enhanced with production features: retry logic, error handling, logging, configuration management
 """
 
+# Initialize logging first
+from logging_config import setup_logging
+setup_logging()
+
 import os
 import json
 import csv
@@ -475,13 +479,28 @@ class ProductionPDFExtractor:
             
             # 5カラムの前段整形（コード列を見ない段階での重複・形状整理）
             from utils.reconcile_entries import reconcile_entries
-            extracted_data = reconcile_entries(extracted_data, sum_tolerance=0)
+            # ========== DIAG: stage2_reconcile ==========
+            stage2_before = len(extracted_data)
+            extracted_data, reconcile_metrics = reconcile_entries(extracted_data, sum_tolerance=0, return_metrics=True)
+            stage2_count = len(extracted_data)
+            logger.info(f"DIAG stage2_reconcile: count={stage2_count} (before={stage2_before}, diff={stage2_count-stage2_before})")
+            logger.info(f"DIAG stage2_reconcile metrics: splits={reconcile_metrics['split_count']}, swaps={reconcile_metrics['swap_count']}, drops={reconcile_metrics['drop_count']}")
+            if stage2_count == 0:
+                logger.error("DIAG stage2_reconcile=0: 前段整形で全削除")
+                raise RuntimeError("DIAG stage2_reconcile=0: 前段整形処理でエントリが全て削除されました。")
             
             # 後処理: 貸借ペア保証と金額バリデーション
             from utils.postprocess import enforce_debit_credit_pairs, validate_amounts
             from config import config
             paired_entries = enforce_debit_credit_pairs(extracted_data)
+            # ========== DIAG: stage3_pair_validate ==========
+            stage3_before = len(paired_entries)
             extracted_data, error_entries = validate_amounts(paired_entries)
+            stage3_count = len(extracted_data)
+            logger.info(f"DIAG stage3_pair_validate: count={stage3_count} (before={stage3_before}, errors={len(error_entries)})")
+            if stage3_count == 0:
+                logger.error("DIAG stage3_pair_validate=0: 金額バリデーションで全削除")
+                raise RuntimeError("DIAG stage3_pair_validate=0: 金額バリデーションでエントリが全て削除されました。")
             
             if error_entries:
                 logger.warning(f"Post-processing found {len(error_entries)} error entries (zero amounts, etc.)")

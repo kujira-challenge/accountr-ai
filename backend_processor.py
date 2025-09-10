@@ -5,13 +5,19 @@ Streamlit Backend Processor
 PDFをアップロードしてCSV形式で仕訳データを出力する
 """
 
+# Initialize logging first
+from logging_config import setup_logging
+setup_logging()
+
 import io
 import json
 import tempfile
+import os
 from pathlib import Path
 from typing import Tuple, Dict, Any
 import pandas as pd
 import logging
+from datetime import datetime
 
 # ローカルモジュール
 from pdf_extractor import ProductionPDFExtractor
@@ -20,6 +26,58 @@ from config import config
 
 # ログ設定
 logger = logging.getLogger(__name__)
+
+def create_diag_snapshot(raw_response, parsed_data, reconciled_data, mjs45_csv, finalized_csv, error_msg):
+    """
+    0件事故時のスナップショット作成
+    
+    Args:
+        raw_response: LLMの生レスポンス
+        parsed_data: 防御パース後のJSON
+        reconciled_data: 前段整形後のJSON
+        mjs45_csv: MJS45中間CSV
+        finalized_csv: 後段整形直前CSV
+        error_msg: エラーメッセージ
+        
+    Returns:
+        str: スナップショットディレクトリのパス
+    """
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    snapshot_dir = Path(f"output/tmp/diag_{timestamp}")
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        # LLMの生レスポンス保存
+        if raw_response:
+            with open(snapshot_dir / "raw_response.txt", 'w', encoding='utf-8') as f:
+                f.write(raw_response)
+        
+        # 各段階のデータ保存
+        stages = [
+            ("parsed_data.json", parsed_data),
+            ("reconciled_data.json", reconciled_data),
+            ("mjs45_intermediate.csv", mjs45_csv),
+            ("finalized_csv_pre.csv", finalized_csv)
+        ]
+        
+        for filename, data in stages:
+            if data is not None:
+                if filename.endswith('.json'):
+                    with open(snapshot_dir / filename, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                elif filename.endswith('.csv') and hasattr(data, 'to_csv'):
+                    data.to_csv(snapshot_dir / filename, index=False, encoding='utf-8-sig')
+        
+        # エラー情報保存
+        with open(snapshot_dir / "error_info.txt", 'w', encoding='utf-8') as f:
+            f.write(f"Error: {error_msg}\n")
+            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+        
+        logger.info(f"Diagnostic snapshot created: {snapshot_dir}")
+        return str(snapshot_dir)
+    except Exception as e:
+        logger.error(f"Failed to create diagnostic snapshot: {e}")
+        return None
 
 def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, Any]]:
     """
@@ -61,7 +119,17 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
             if not result.success:
                 raise Exception(f"PDF processing failed: {result.error_message}")
             
-            logger.info(f"Successfully processed PDF: {len(result.data)} entries extracted")
+            # ========== DIAG: stage1_parse ==========
+            stage1_count = len(result.data) if result.data else 0
+            logger.info(f"DIAG stage1_parse: count={stage1_count}")
+            if stage1_count == 0:
+                raise RuntimeError("DIAG stage1_parse=0: 防御パース後の5カラム配列が空。PDF読取またはLLM抽出に失敗。")
+            
+            # サンプル摘要をログに表示
+            sample_memos = [entry.get("摘要", "")[:50] for entry in result.data[:2]]
+            logger.info(f"DIAG stage1_parse samples: {sample_memos}")
+            
+            logger.info(f"Successfully processed PDF: {stage1_count} entries extracted")
             
             # 5カラムJSON→45列MJS CSV変換
             if result.data:
@@ -95,10 +163,21 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
                         # 4. 45列CSVを読み込んでDataFrameに変換
                         if mjs_csv_path.exists():
                             df = pd.read_csv(mjs_csv_path, encoding='utf-8-sig')
-                            logger.info(f"MJS 45-column CSV loaded: {len(df)} rows")
+                            
+                            # ========== DIAG: stage4_mjs45 ==========
+                            stage4_count = len(df)
+                            logger.info(f"DIAG stage4_mjs45: count={stage4_count}")
+                            if stage4_count == 0:
+                                raise RuntimeError("DIAG stage4_mjs45=0: コード割当結果が空。名寄せ/マスタ読込を確認してください。")
+                            
+                            logger.info(f"MJS 45-column CSV loaded: {stage4_count} rows")
                         else:
                             logger.error("MJS CSV file was not created")
                             df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
+                            
+                            # ========== DIAG: stage4_mjs45 ==========
+                            logger.error(f"DIAG stage4_mjs45: count=0")
+                            raise RuntimeError("DIAG stage4_mjs45=0: MJSファイルが作成されませんでした。")
                         
                     except Exception as e:
                         logger.error(f"MJS conversion failed: {e}")
@@ -106,6 +185,10 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
                         df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
                 
             else:
+                # ========== DIAG: stage1_parse ==========
+                logger.error(f"DIAG stage1_parse: count=0")
+                raise RuntimeError("DIAG stage1_parse=0: PDF抽出結果が空。")
+                
                 # 空の45列DataFrame作成
                 df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
             
@@ -121,6 +204,21 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
                     
                     # 両コード空除去と重複除去
                     finalized_rows = finalize_csv_rows(csv_rows)
+                    
+                    # ========== DIAG: stage5_finalize ==========
+                    stage5_count = len(finalized_rows)
+                    logger.info(f"DIAG stage5_finalize: count={stage5_count}")
+                    if stage5_count == 0:
+                        # スナップショット作成
+                        snapshot_dir = create_diag_snapshot(
+                            raw_response=None,  # PDF処理では生レスポンス取得困難
+                            parsed_data=result.data if result else None,
+                            reconciled_data=None,  # 前段整形データ取得困難
+                            mjs45_csv=df,
+                            finalized_csv=pd.DataFrame(csv_rows),
+                            error_msg="stage5_finalize=0: 後段整形で全除去"
+                        )
+                        raise RuntimeError(f"DIAG stage5_finalize=0: 後段整形で全除去。条件過剰 or 前段/名寄せ不整合。snapshot={snapshot_dir}")
                     
                     # 整形後のDataFrameに変換
                     if finalized_rows:
