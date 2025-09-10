@@ -34,11 +34,13 @@ def _side(row):
 
 def reconcile_and_dedupe(entries: list) -> list:
     """
-    重複見えを解消する最終整形：
-      1) N行（両コード空）除去（フォールバックを除く）
-      2) one-vs-many（合算=明細合計）を分割して揃える
-      3) 同一サイド内の 合算=max=sum(others) を除去
-      4) そのほかは通過
+    重複見えを解消する最終整形（両コード空除外は削除済み）：
+      1) one-vs-many（合算=明細合計）を分割して揃える
+      2) 同一サイド内の 合算=max=sum(others) を除去
+      3) そのほかは通過
+    
+    ★重要★ 「両コード空除外」はCSV直前（finalize_csv）でのみ実施。
+    5カラム段階では絶対に除外しない。
     """
     if not entries:
         return entries
@@ -46,22 +48,9 @@ def reconcile_and_dedupe(entries: list) -> list:
     original_count = len(entries)
     logger.info(f"Starting reconciliation and deduplication with {original_count} entries")
     
-    # ---- 1) N行除去（フォールバックは別ハンドリング） ----
-    work = []
-    n_removed = 0
-    for e in entries:
-        if e.get("（借）科目ｺｰﾄﾞ", "") == "" and e.get("（貸）科目ｺｰﾄﾞ", "") == "":
-            n_removed += 1
-            logger.debug(f"Removing empty code row: {e.get('摘要', '')[:50]}...")
-        else:
-            work.append(e)
-    
-    if n_removed > 0:
-        logger.info(f"Removed {n_removed} rows with empty both-side codes")
-    
     # グループ化キー
     buckets = defaultdict(list)
-    for e in work:
+    for e in entries:
         gid = (_nfkc(e.get("伝票日付", "")), _base_memo(e.get("摘要", "")))
         buckets[gid].append(e)
     
@@ -149,13 +138,12 @@ def reconcile_and_dedupe(entries: list) -> list:
         out.extend(C2)
     
     final_count = len(out)
-    total_removed = original_count - final_count
     
     if one_vs_many_splits > 0:
         logger.info(f"Performed {one_vs_many_splits} one-vs-many splits")
     if sum_rows_removed > 0:
         logger.info(f"Removed {sum_rows_removed} sum rows")
-    if total_removed > 0:
-        logger.info(f"Total entries changed: {original_count} -> {final_count} (net change: {total_removed})")
+    
+    logger.info(f"Reconciliation completed: {original_count} -> {final_count} entries (splits={one_vs_many_splits}, sum_removed={sum_rows_removed})")
     
     return out

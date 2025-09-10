@@ -255,6 +255,26 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
             error_entries = getattr(extractor, 'error_entries', [])
             missing_codes_count = len([row for _, row in df.iterrows() if '【科目コード要確認】' in str(row.get('摘要', ''))])
             
+            # メトリクス情報を収集  
+            metrics_info = {
+                # ステージ別件数
+                "stage1_count": stage1_count if 'stage1_count' in locals() else 0,
+                "stage2_count": getattr(extractor, 'stage2_count', 0),
+                "stage3_count": getattr(extractor, 'stage3_count', 0),
+                "stage4_count": getattr(extractor, 'stage4_count', 0),
+                "stage5_count": len(df),
+                
+                # 前段整形メトリクス
+                "one_vs_many_splits": getattr(extractor, 'one_vs_many_splits', 0),
+                "left_right_swaps": getattr(extractor, 'left_right_swaps', 0),
+                "sum_rows_dropped": getattr(extractor, 'sum_rows_dropped', 0),
+                
+                # 後段整形メトリクス
+                "empty_codes_excluded": getattr(extractor, 'empty_codes_excluded', 0),
+                "duplicates_excluded": getattr(extractor, 'duplicates_excluded', 0),
+                "unassigned_codes": missing_codes_count
+            }
+            
             # 処理情報を準備
             processing_info = {
                 "cost_usd": getattr(result, 'total_cost_usd', 0.0),
@@ -264,7 +284,8 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
                 "entries_extracted": len(df),
                 "error_entries": error_entries,
                 "missing_codes_count": missing_codes_count,
-                "zero_amount_errors": len(error_entries)
+                "zero_amount_errors": len(error_entries),
+                "metrics": metrics_info
             }
             
             return df, csv_bytes, processing_info

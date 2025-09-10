@@ -217,6 +217,49 @@ if uploaded_file is not None:
                     if len(error_entries) > 5:
                         st.caption(f"... 他 {len(error_entries) - 5} 件")
         
+        # 処理メトリクス表示
+        metrics = processing_info.get('metrics', {})
+        if metrics and any(v > 0 for v in metrics.values()):
+            with st.expander("📊 処理統計・監査情報", expanded=False):
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.subheader("🔄 前段整形")
+                    if metrics.get('one_vs_many_splits', 0) > 0:
+                        st.metric("one-vs-many分割", metrics['one_vs_many_splits'], help="片側合算行を明細に分割した件数")
+                    if metrics.get('left_right_swaps', 0) > 0:
+                        st.metric("左右入替", metrics['left_right_swaps'], help="借方⇔貸方を自動入替した件数")
+                    if metrics.get('sum_rows_dropped', 0) > 0:
+                        st.metric("合算行除去", metrics['sum_rows_dropped'], help="重複する合算行を除去した件数")
+                
+                with col2:
+                    st.subheader("🔚 後段整形")
+                    if metrics.get('empty_codes_excluded', 0) > 0:
+                        st.metric("両コード空除外", metrics['empty_codes_excluded'], help="借方・貸方コードが両方とも空の行を除外")
+                    if metrics.get('duplicates_excluded', 0) > 0:
+                        st.metric("重複圧縮", metrics['duplicates_excluded'], help="完全重複した行を圧縮")
+                    if metrics.get('unassigned_codes', 0) > 0:
+                        st.metric("未割当要確認", metrics['unassigned_codes'], help="科目コードが割り当てられていない行")
+                
+                with col3:
+                    st.subheader("📈 ステージ推移")
+                    stage_data = {
+                        "parse": metrics.get('stage1_count', 0),
+                        "reconcile": metrics.get('stage2_count', 0), 
+                        "validate": metrics.get('stage3_count', 0),
+                        "assign": metrics.get('stage4_count', 0),
+                        "final": metrics.get('stage5_count', 0)
+                    }
+                    for stage, count in stage_data.items():
+                        if count > 0:
+                            st.metric(f"stage_{stage}", count)
+                
+                # 処理フロー図的表示
+                if all(stage_data.values()):
+                    st.write("**処理フロー:** ", end="")
+                    flow_text = " → ".join([f"{stage}({count})" for stage, count in stage_data.items()])
+                    st.write(flow_text)
+        
         # 結果サマリー
         col_result1, col_result2, col_result3 = st.columns(3)
         with col_result1:

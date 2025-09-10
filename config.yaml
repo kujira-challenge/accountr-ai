@@ -1,0 +1,52 @@
+# Accounting Journal System Configuration
+# PDF Processing and OCR Settings
+
+# PDF Processing
+pdf:
+  # Right column zoom for credit side recognition improvement
+  right_col_zoom: true
+  # DPI settings for image conversion
+  dpi: 180
+  # Pages per split for processing
+  pages_per_split: 5
+
+# Claude API Settings
+claude:
+  # Model configuration
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 4096
+  temperature: 0
+  # Enhanced prompt for right column recognition
+  enhanced_prompts: true
+
+# Processing Settings
+processing:
+  # Two-stage processing order
+  front_stage_reconcile: true
+  back_stage_finalize_only: true
+  # Zero count exception handling
+  zero_count_exception: true
+  # Diagnostic snapshots
+  diag_snapshots: true
+
+# Logging
+logging:
+  # Force INFO level logs
+  level: "INFO"
+  # Singleton initialization
+  singleton: true
+  # Stage-based diagnostic logging
+  stage_logging: true
+
+# UI Settings
+ui:
+  # Show processing metrics
+  show_metrics: true
+  # Metrics to display
+  metrics:
+    - empty_codes_excluded
+    - duplicates_excluded
+    - one_vs_many_splits
+    - left_right_swaps
+    - unassigned_codes
+    - sum_rows_dropped

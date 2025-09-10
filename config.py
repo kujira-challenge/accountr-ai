@@ -7,12 +7,27 @@ Environment-based configuration for production use
 
 import os
 import logging
+import yaml
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Load YAML configuration
+def load_yaml_config():
+    """Load configuration from config.yaml if it exists"""
+    config_path = Path(__file__).parent / "config.yaml"
+    if config_path.exists():
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return yaml.safe_load(f) or {}
+        except Exception as e:
+            print(f"Warning: Failed to load config.yaml: {e}")
+    return {}
+
+_yaml_config = load_yaml_config()
 
 # Streamlit import for secrets management
 try:
@@ -100,6 +115,10 @@ class Config:
     PAGES_PER_SPLIT = int(os.getenv('PAGES_PER_SPLIT', '5'))  # 5ページ単位投入（安定化）
     MAX_FILE_SIZE_MB = int(os.getenv('MAX_FILE_SIZE_MB', '50'))
     PDF_DPI = int(os.getenv('PDF_DPI', '200'))  # 150-200DPI推奨、過度な圧縮回避
+    
+    # Right column zoom for credit side improvement
+    RIGHT_COL_ZOOM = _yaml_config.get('pdf', {}).get('right_col_zoom', False)
+    RIGHT_COL_DPI = int(_yaml_config.get('pdf', {}).get('dpi', PDF_DPI))  # Use same DPI or config override
     
     # API Rate Limiting
     API_REQUEST_INTERVAL = float(os.getenv('API_REQUEST_INTERVAL', '2'))
