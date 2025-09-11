@@ -18,6 +18,7 @@ from pathlib import Path
 # ローカルモジュール
 from backend_processor import process_pdf_to_csv
 from config import config
+import yaml
 
 # ページ設定
 st.set_page_config(
@@ -56,27 +57,116 @@ except Exception as e:
     st.error("🔐 システム管理者にお問い合わせください")
     st.stop()
 
+# LLM プロバイダ選択
+st.sidebar.markdown("---")
+st.sidebar.markdown("🤖 **LLM設定**")
+
+# Load configuration
+@st.cache_data
+def load_llm_config():
+    try:
+        with open("config.yaml", "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    except Exception as e:
+        st.sidebar.error(f"❌ 設定ファイル読込エラー: {e}")
+        return {
+            "llm": {"provider": "anthropic", "model": "claude-3-5-sonnet-20240620", "temperature": 0.0},
+            "pricing": {"anthropic": {"claude-3-5-sonnet-20240620": {"in": 0.000003, "out": 0.000015}}}
+        }
+
+cfg = load_llm_config()
+
+# Provider selection
+providers = ["anthropic", "gemini"]
+provider_index = 0
+try:
+    provider_index = providers.index(cfg["llm"]["provider"])
+except (KeyError, ValueError):
+    pass
+
+provider = st.sidebar.selectbox(
+    "LLMプロバイダ", 
+    providers, 
+    index=provider_index,
+    help="APIコストを削減したい場合はGeminiを選択"
+)
+
+# Model selection based on provider
+models_by_provider = {
+    "anthropic": ["claude-3-5-sonnet-20240620", "claude-3-5-haiku-20240307"],
+    "gemini": ["gemini-1.5-flash", "gemini-1.5-pro"],
+}
+
+model_index = 0
+try:
+    current_models = models_by_provider[provider]
+    if cfg["llm"]["model"] in current_models:
+        model_index = current_models.index(cfg["llm"]["model"])
+except (KeyError, ValueError):
+    pass
+
+model = st.sidebar.selectbox(
+    "モデル", 
+    models_by_provider[provider], 
+    index=model_index,
+    help="Flash系モデルはコストが安く、Pro/Sonnet系は精度重視"
+)
+
+# Temperature setting
+temp = st.sidebar.slider(
+    "Temperature", 
+    0.0, 1.0, 
+    value=float(cfg["llm"].get("temperature", 0.0)), 
+    step=0.1,
+    help="0.0=決定的、1.0=創造的"
+)
+
+# Update session configuration
+if 'llm_config' not in st.session_state:
+    st.session_state.llm_config = {}
+
+st.session_state.llm_config = {
+    "provider": provider,
+    "model": model,
+    "temperature": temp
+}
+
+# Show cost estimation
+pricing = cfg.get("pricing", {})
+if provider in pricing and model in pricing[provider]:
+    model_pricing = pricing[provider][model]
+    st.sidebar.info(f"💰 単価: 入力¥{model_pricing['in']*150:.4f}/1kトークン, 出力¥{model_pricing['out']*150:.4f}/1kトークン")
+
 # サイドバー - システム情報
 with st.sidebar:
     st.header("📊 システム情報")
-    st.write("**AI Engine:** Claude Sonnet 4.0")
+    st.write(f"**AI Engine:** {provider.title()} ({model})")
     st.write(f"**分割単位:** 5ページ（安定化）")
     st.write(f"**処理モード:** 🚀 本番（常時）")
     
     # API設定確認とエラーハンドリング
     try:
-        api_key = config.ANTHROPIC_API_KEY
-        if api_key and api_key != 'DUMMY_API_KEY':
-            st.success("✅ Claude API接続準備完了")
-        else:
-            st.error("❌ Claude APIキーが未設定")
-            st.warning("Streamlit Cloudの場合：Settings > Secrets でANTHROPIC_API_KEYを設定してください")
+        if provider == "anthropic":
+            api_key = config.ANTHROPIC_API_KEY
+            if api_key and api_key != 'DUMMY_API_KEY':
+                st.success("✅ Anthropic API接続準備完了")
+            else:
+                st.error("❌ Anthropic APIキーが未設定")
+                st.warning("Settings > Secrets でANTHROPIC_API_KEYを設定してください")
+        else:  # gemini
+            import os
+            api_key = os.environ.get("GOOGLE_API_KEY")
+            if api_key:
+                st.success("✅ Gemini API接続準備完了")
+            else:
+                st.error("❌ Gemini APIキーが未設定")
+                st.warning("Settings > Secrets でGOOGLE_API_KEYを設定してください")
     except Exception as e:
         st.error(f"❌ API設定エラー: {str(e)}")
         st.info("💡 設定を確認してアプリを再起動してください")
     
     st.divider()
-    st.caption("Powered by Claude Sonnet 4.0")
+    st.caption(f"Powered by {provider.title()} {model}")
 
 # セッションステート初期化（結果保存用）
 if 'processing_result' not in st.session_state:
@@ -102,10 +192,18 @@ with col2:
         st.info(f"📊 **サイズ:** {uploaded_file.size / 1024 / 1024:.1f} MB")
 
 # APIキーチェック
-if not config.ANTHROPIC_API_KEY or config.ANTHROPIC_API_KEY == 'DUMMY_API_KEY':
-    st.error("🚫 Claude APIキーが設定されていません")
-    st.info("📝 デプロイ後の設定が必要です。README.mdの手順に従ってAPIキーを設定してください。")
-    st.stop()
+current_provider = st.session_state.llm_config.get("provider", "anthropic")
+if current_provider == "anthropic":
+    if not config.ANTHROPIC_API_KEY or config.ANTHROPIC_API_KEY == 'DUMMY_API_KEY':
+        st.error("🚫 Anthropic APIキーが設定されていません")
+        st.info("📝 デプロイ後の設定が必要です。README.mdの手順に従ってAPIキーを設定してください。")
+        st.stop()
+else:  # gemini
+    import os
+    if not os.environ.get("GOOGLE_API_KEY"):
+        st.error("🚫 Gemini APIキーが設定されていません")
+        st.info("📝 デプロイ後の設定が必要です。Streamlit SecretsでGOOGLE_API_KEYを設定してください。")
+        st.stop()
 
 # 変換処理 - 抽出開始ボタン
 if uploaded_file is not None:
@@ -118,6 +216,9 @@ if uploaded_file is not None:
     # 概算コスト表示
     st.info(f"📊 **概算**: {estimated_pages}ページ予想 / 概算費用: ¥{estimate_cost_jpy:.0f} (${estimate_cost_usd:.3f} USD)")
     
+    # Current model display
+    current_model_display = f"{st.session_state.llm_config['provider'].title()} {st.session_state.llm_config['model']}"
+    
     # 抽出開始ボタン
     st.divider()
     col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
@@ -126,13 +227,13 @@ if uploaded_file is not None:
             "🚀 抽出開始",
             use_container_width=True,
             type="primary",
-            help="Claude Sonnet 4.0で仕訳データの抽出を開始します"
+            help=f"{current_model_display}で仕訳データの抽出を開始します"
         )
     
     # 処理実行
     if convert_clicked:
-        # 自動処理
-        with st.spinner("🔄 Claude Sonnet 4.0で仕訳データを抽出中..."):
+        # 自動処理  
+        with st.spinner(f"🔄 {current_model_display}で仕訳データを抽出中..."):
             try:
                 start_time = datetime.now()
                 
@@ -142,6 +243,17 @@ if uploaded_file is not None:
                 
                 status_text.text("📄 PDFを5ページずつ分割中...")
                 progress_bar.progress(25)
+                
+                # Update config.yaml with current UI settings
+                with open("config.yaml", "w", encoding="utf-8") as f:
+                    cfg_copy = cfg.copy()
+                    cfg_copy["llm"]["provider"] = st.session_state.llm_config["provider"]
+                    cfg_copy["llm"]["model"] = st.session_state.llm_config["model"] 
+                    cfg_copy["llm"]["temperature"] = st.session_state.llm_config["temperature"]
+                    yaml.safe_dump(cfg_copy, f, default_flow_style=False, allow_unicode=True)
+                
+                # Clear cache to reload config
+                load_llm_config.clear()
                 
                 # メイン処理
                 df, csv_bytes, processing_info = process_pdf_to_csv(uploaded_file)

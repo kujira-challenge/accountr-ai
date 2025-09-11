@@ -18,6 +18,7 @@ import logging
 import time
 import gc
 import hashlib
+import yaml
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
 from datetime import datetime
@@ -45,6 +46,9 @@ try:
     HAS_ANTHROPIC = True
 except ImportError:
     HAS_ANTHROPIC = False
+
+# LLM Provider abstraction
+from llm_providers.factory import build as build_llm
 
 try:
     import requests
@@ -120,23 +124,38 @@ class ProductionPDFExtractor:
     
     def __init__(self, api_key: Optional[str] = None, use_mock: Optional[bool] = None):
         """
-        Initialize production PDF extractor for Claude Sonnet 4.0
+        Initialize production PDF extractor with multi-provider support
         
         Args:
-            api_key: Anthropic API key (overrides config if provided)
+            api_key: API key (overrides config if provided)
             use_mock: Deprecated parameter (ignored, always uses production API)
         """
-        # Claude Sonnet 4.0専用
-        self.api_provider = 'anthropic'
-        self.api_key = api_key or config.ANTHROPIC_API_KEY
-        self.model_name = config.ANTHROPIC_MODEL
-        self.max_tokens = config.ANTHROPIC_MAX_TOKENS
+        # Load configuration
+        self.config = self._load_config()
+        
+        # LLM Provider configuration
+        self.provider_name = self.config["llm"]["provider"]
+        self.model_name = self.config["llm"]["model"]
+        self.temperature = self.config["llm"].get("temperature", 0.0)
+        self.pricing = self.config.get("pricing", {})
+        
+        # Legacy compatibility
+        self.api_provider = self.provider_name
+        self.api_key = api_key or (
+            config.ANTHROPIC_API_KEY if self.provider_name == "anthropic" 
+            else os.environ.get("GOOGLE_API_KEY")
+        )
+        self.max_tokens = 4096
             
         self.use_mock = False  # モックモード完全撤廃
         
-        # Initialize API client (always for production)
+        # Initialize LLM provider
+        self.llm_provider = build_llm(self.provider_name, self.model_name, self.pricing)
+        
+        # Initialize legacy API client for backward compatibility
         self.client = None
-        self._initialize_api_client()
+        if self.provider_name == "anthropic":
+            self._initialize_api_client()
         
         # Processing settings
         self.max_retries = config.MAX_RETRIES
@@ -165,7 +184,27 @@ class ProductionPDFExtractor:
             'total_cost_jpy': 0.0
         }
         
-        logger.info(f"ProductionPDFExtractor initialized - Provider: {self.api_provider}, Mock: {self.use_mock}")
+        logger.info(f"ProductionPDFExtractor initialized - Provider: {self.api_provider}, Model: {self.model_name}")
+    
+    def _load_config(self) -> dict:
+        """Load configuration from config.yaml"""
+        try:
+            with open("config.yaml", "r", encoding="utf-8") as f:
+                return yaml.safe_load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load config.yaml: {e}, using defaults")
+            return {
+                "llm": {
+                    "provider": "anthropic",
+                    "model": "claude-3-5-sonnet-20240620", 
+                    "temperature": 0.0
+                },
+                "pricing": {
+                    "anthropic": {
+                        "claude-3-5-sonnet-20240620": {"in": 0.000003, "out": 0.000015}
+                    }
+                }
+            }
     
     def _initialize_api_client(self) -> None:
         """Initialize Anthropic API client with validation"""
@@ -557,130 +596,82 @@ class ProductionPDFExtractor:
         return mask_list_for_logging(data, sample_size=2)
     
     def _call_claude_api(self, system_prompt: str, user_prompt: str, images_b64: List[str]) -> Tuple[str, float]:
-        """Call Claude Sonnet 4.0 API with system prompt and images"""
+        """Call LLM API with system prompt and images using provider abstraction"""
         try:
-            # Build user message
-            message = {
-                "role": "user",
-                "content": [{"type": "text", "text": user_prompt}]
-            }
+            logger.info(f"Making {self.provider_name} API call with model: {self.model_name}")
             
-            # Add images
+            # Convert PNG base64 images to JPEG base64 for provider consistency
+            images_jpeg_b64 = []
             for img_b64 in images_b64:
-                message["content"].append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/png", 
-                        "data": img_b64
-                    }
-                })
+                # Convert PNG to JPEG for consistency across providers
+                from PIL import Image
+                import io
+                
+                # Decode base64 PNG
+                img_data = base64.b64decode(img_b64)
+                img = Image.open(io.BytesIO(img_data))
+                
+                # Convert to JPEG
+                jpeg_buffer = io.BytesIO()
+                if img.mode in ("RGBA", "LA", "P"):
+                    img = img.convert("RGB")
+                img.save(jpeg_buffer, format="JPEG", quality=90)
+                jpeg_data = jpeg_buffer.getvalue()
+                
+                # Re-encode to base64
+                jpeg_b64 = base64.b64encode(jpeg_data)
+                images_jpeg_b64.append(jpeg_b64)
             
-            logger.info(f"Making Claude API call with model: {self.model_name}")
+            # Use the LLM provider abstraction
+            result = self.llm_provider.generate(
+                system=system_prompt,
+                user=user_prompt,
+                images=images_jpeg_b64,
+                model=self.model_name,
+                temperature=self.temperature
+            )
             
-            # JSON Schema for forced object array output
-            response_format = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "five_columns",
-                    "schema": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "required": ["伝票日付", "借貸区分", "科目名", "金額", "摘要"],
-                            "properties": {
-                                "伝票日付": {"type": "string"},
-                                "借貸区分": {"type": "string", "enum": ["借方", "貸方"]},
-                                "科目名": {"type": "string"},
-                                "金額": {"type": ["string", "number"]},
-                                "摘要": {"type": "string"}
-                            },
-                            "additionalProperties": False
-                        }
-                    }
-                }
-            }
+            # Log usage information
+            logger.info(f"使用トークン数: input={result.tokens_in}, "
+                      f"output={result.tokens_out}, "
+                      f"total={result.tokens_in + result.tokens_out}")
             
-            # Make API call with stabilized settings (response_format removed for compatibility)
-            try:
-                # Try with response_format first (for future compatibility)
-                try:
-                    response = self.client.messages.create(
-                        model=self.model_name,
-                        max_tokens=4096,  # 安定化: 切断を避ける
-                        temperature=0,    # 安定化: 精度重視、再現性確保
-                        system=system_prompt,  # Systemプロンプトをシステムに設定
-                        messages=[message],
-                        timeout=self.request_timeout,
-                        response_format=response_format  # JSON Schema強制（将来対応時）
-                    )
-                    logger.info("JSON Schema強制モード: 成功")
-                except (TypeError, AttributeError) as schema_error:
-                    logger.info(f"JSON Schema非対応 - 従来モードで続行: {type(schema_error).__name__}")
-                    # Fallback to normal API call without response_format
-                    response = self.client.messages.create(
-                        model=self.model_name,
-                        max_tokens=4096,  # 安定化: 切断を避ける
-                        temperature=0,    # 安定化: 精度重視、再現性確保
-                        system=system_prompt,  # Systemプロンプトをシステムに設定
-                        messages=[message],
-                        timeout=self.request_timeout
-                    )
-            except Exception as e:
-                logger.error(f"Claude API call failed: {e}")
-                raise
+            # Log cost information
+            current_usd_rate = config.get_current_usd_to_jpy_rate()
+            cost_jpy = result.cost_usd * current_usd_rate
+            logger.info(f"推定費用: ${result.cost_usd:.4f} USD (¥{cost_jpy:.2f} JPY) [レート: {current_usd_rate:.2f}]")
+            logger.info(f"Provider={self.provider_name}, Model={self.model_name}, Tokens_in={result.tokens_in}, Tokens_out={result.tokens_out}, Cost_USD={result.cost_usd:.4f}")
             
-            # usage 情報をログに追加と費用計算
-            cost_usd = 0.0
-            try:
-                if hasattr(response, "usage") and response.usage:
-                    logger.info(f"使用トークン数: input={response.usage.input_tokens}, "
-                              f"output={response.usage.output_tokens}, "
-                              f"total={response.usage.input_tokens + response.usage.output_tokens}")
-                    
-                    # 費用計算
-                    cost_usd = calculate_api_cost(self.model_name, response.usage)
-                    current_usd_rate = config.get_current_usd_to_jpy_rate()
-                    cost_jpy = cost_usd * current_usd_rate
-                    logger.info(f"推定費用: ${cost_usd:.4f} USD (¥{cost_jpy:.2f} JPY) [レート: {current_usd_rate:.2f}]")
-                    
-                    # 統計に追加
-                    self.stats['total_cost_usd'] += cost_usd
-                    self.stats['total_cost_jpy'] += cost_jpy
-                else:
-                    logger.warning("API response does not contain usage information")
-            except Exception as e:
-                logger.error(f"Error processing usage information: {e}")
-                cost_usd = 0.0
-            
-            response_text = response.content[0].text.strip()
+            response_text = result.text.strip()
             
             # レスポンス内容をログに記録（デバッグ用・PII配慮）
             sanitized_preview = self._sanitize_for_logging(response_text[:8000])  # 最大8KB
-            logger.debug(f"Claude API Response length: {len(response_text)} characters")
-            logger.debug(f"Claude API Response preview: {sanitized_preview[:500]}...")
+            logger.debug(f"LLM API Response length: {len(response_text)} characters")
+            logger.debug(f"LLM API Response preview: {sanitized_preview[:500]}...")
             
             # 推定結果件数をログに記録
             estimated_entries = response_text.count('"{') if response_text else 0
-            logger.info(f"Claude API推定結果: {estimated_entries}件のエントリ候補")
+            logger.info(f"{self.provider_name} API推定結果: {estimated_entries}件のエントリ候補")
             
             # デバッグ用: レスポンスをファイルに保存
             if config.DEBUG_MODE:
                 debug_dir = config.LOG_DIR / "debug_responses"
                 debug_dir.mkdir(parents=True, exist_ok=True)
-                debug_file = debug_dir / f"claude_response_{int(time.time())}.txt"
+                debug_file = debug_dir / f"{self.provider_name}_response_{int(time.time())}.txt"
                 with open(debug_file, 'w', encoding='utf-8') as f:
+                    f.write(f"Provider: {self.provider_name}\n")
                     f.write(f"Model: {self.model_name}\n")
                     f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-                    f.write(f"Cost: ${cost_usd:.4f} USD\n")
+                    f.write(f"Cost: ${result.cost_usd:.4f} USD\n")
+                    f.write(f"Tokens: {result.tokens_in} in, {result.tokens_out} out\n")
                     f.write("="*50 + "\n")
                     f.write(response_text)
-                logger.info(f"Claude API response saved to: {debug_file}")
+                logger.info(f"{self.provider_name} API response saved to: {debug_file}")
             
-            return response_text, cost_usd
+            return response_text, result.cost_usd
             
         except Exception as e:
-            logger.error(f"Claude API call failed: {e}")
+            logger.error(f"{self.provider_name} API call failed: {e}")
             raise
     
     def _clean_json_response(self, response_text: str) -> str:

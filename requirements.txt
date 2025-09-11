@@ -9,9 +9,10 @@
 streamlit>=1.32.0
 
 # ==================================================
-# AI API - Claude Sonnet 4.0 Only
+# AI API - Multi-provider Support
 # ==================================================
 anthropic>=0.34.2
+google-generativeai>=0.6.0
 
 # ==================================================
 # PDF Processing
