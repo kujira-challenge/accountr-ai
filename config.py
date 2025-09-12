@@ -89,7 +89,7 @@ class Config:
     def ANTHROPIC_API_KEY(self) -> str:
         return self._get_secret('ANTHROPIC_API_KEY')
     
-    ANTHROPIC_MODEL = os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-0')
+    ANTHROPIC_MODEL = os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-20250514')
     ANTHROPIC_MAX_TOKENS = int(os.getenv('ANTHROPIC_MAX_TOKENS', '64000'))
     ANTHROPIC_BETA_HEADERS = os.getenv('ANTHROPIC_BETA_HEADERS', 'context-1m-2025-08-07')
     
@@ -192,9 +192,17 @@ class Config:
     # API Pricing Configuration (USD per 1K tokens)
     # ==================================================
     API_PRICES = {
-        "gpt-4o": {"input": 0.005, "output": 0.015},
-        "claude-3-5-sonnet": {"input": 0.003, "output": 0.015},
-        "claude-sonnet-4-0": {"input": 0.003, "output": 0.015},  # Same as Claude 3.5 Sonnet
+        # OpenAI GPT-5 (Latest)
+        "gpt-5": {"input": 0.005, "output": 0.015},
+        "gpt-5-mini": {"input": 0.001, "output": 0.003},
+        # Anthropic Claude (Latest)
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet": {"input": 0.003, "output": 0.015},  # Legacy
+        # Google Gemini (Latest)
+        "gemini-2.5-flash": {"input": 0.0003, "output": 0.0006},
+        "gemini-2.5-pro": {"input": 0.0015, "output": 0.005},
+        "gemini-1.5-pro": {"input": 0.0015, "output": 0.005},  # Legacy
+        "gemini-1.5-flash": {"input": 0.0003, "output": 0.0006},  # Legacy
     }
     
     # USD to JPY conversion rate (approximate)

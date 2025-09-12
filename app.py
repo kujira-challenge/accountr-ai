@@ -77,7 +77,7 @@ def load_llm_config():
 cfg = load_llm_config()
 
 # Provider selection
-providers = ["anthropic", "gemini"]
+providers = ["anthropic", "gemini", "openai"]
 provider_index = 0
 try:
     provider_index = providers.index(cfg["llm"]["provider"])
@@ -88,13 +88,14 @@ provider = st.sidebar.selectbox(
     "LLMプロバイダ", 
     providers, 
     index=provider_index,
-    help="APIコストを削減したい場合はGeminiを選択"
+    help="APIコストを削減したい場合はGeminiを選択、最新モデル使用はClaude Sonnet 4やGPT-5を選択"
 )
 
 # Model selection based on provider
 models_by_provider = {
-    "anthropic": ["claude-3-5-sonnet-20240620", "claude-3-5-haiku-20240307"],
-    "gemini": ["gemini-1.5-flash", "gemini-1.5-pro"],
+    "anthropic": ["claude-sonnet-4-20250514", "claude-3-5-sonnet-20240620", "claude-3-5-haiku-20240307"],
+    "gemini": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"],
+    "openai": ["gpt-5", "gpt-5-mini"]
 }
 
 model_index = 0
@@ -131,11 +132,12 @@ st.session_state.llm_config = {
     "temperature": temp
 }
 
-# Show cost estimation
+# Show cost estimation with current exchange rate
 pricing = cfg.get("pricing", {})
 if provider in pricing and model in pricing[provider]:
     model_pricing = pricing[provider][model]
-    st.sidebar.info(f"💰 単価: 入力¥{model_pricing['in']*150:.4f}/1kトークン, 出力¥{model_pricing['out']*150:.4f}/1kトークン")
+    current_rate = config.get_current_usd_to_jpy_rate()
+    st.sidebar.info(f"💰 {provider.title()} {model} 単価:\n入力: ¥{model_pricing['in']*current_rate:.4f}/1kトークン\n出力: ¥{model_pricing['out']*current_rate:.4f}/1kトークン\n為替レート: ¥{current_rate:.0f}/USD")
 
 # サイドバー - システム情報
 with st.sidebar:
@@ -153,7 +155,7 @@ with st.sidebar:
             else:
                 st.error("❌ Anthropic APIキーが未設定")
                 st.warning("Settings > Secrets でANTHROPIC_API_KEYを設定してください")
-        else:  # gemini
+        elif provider == "gemini":
             import os
             api_key = os.environ.get("GOOGLE_API_KEY")
             if api_key:
@@ -161,6 +163,14 @@ with st.sidebar:
             else:
                 st.error("❌ Gemini APIキーが未設定")
                 st.warning("Settings > Secrets でGOOGLE_API_KEYを設定してください")
+        else:  # openai
+            import os
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if api_key:
+                st.success("✅ OpenAI API接続準備完了")
+            else:
+                st.error("❌ OpenAI APIキーが未設定")
+                st.warning("Settings > Secrets でOPENAI_API_KEYを設定してください")
     except Exception as e:
         st.error(f"❌ API設定エラー: {str(e)}")
         st.info("💡 設定を確認してアプリを再起動してください")
@@ -198,26 +208,61 @@ if current_provider == "anthropic":
         st.error("🚫 Anthropic APIキーが設定されていません")
         st.info("📝 デプロイ後の設定が必要です。README.mdの手順に従ってAPIキーを設定してください。")
         st.stop()
-else:  # gemini
+elif current_provider == "gemini":
     import os
     if not os.environ.get("GOOGLE_API_KEY"):
         st.error("🚫 Gemini APIキーが設定されていません")
         st.info("📝 デプロイ後の設定が必要です。Streamlit SecretsでGOOGLE_API_KEYを設定してください。")
         st.stop()
+else:  # openai
+    import os
+    if not os.environ.get("OPENAI_API_KEY"):
+        st.error("🚫 OpenAI APIキーが設定されていません")
+        st.info("📝 デプロイ後の設定が必要です。Streamlit SecretsでOPENAI_API_KEYを設定してください。")
+        st.stop()
 
 # 変換処理 - 抽出開始ボタン
 if uploaded_file is not None:
     
-    # 概算費用計算（ファイルサイズ×係数）
-    estimated_pages = max(1, int(uploaded_file.size / (1024 * 300)))  # 300KB/ページ仮定
-    estimate_cost_usd = estimated_pages * 0.01  # 1ページあたり$0.01概算
+    # 動的概算費用計算（選択されたモデルの価格に基づく）
+    def calculate_flexible_estimate(file_size_bytes, provider, model, pricing_config):
+        """選択されたモデルに基づく動的費用概算"""
+        # ページ数推定（より正確に）
+        estimated_pages = max(1, int(file_size_bytes / (1024 * 250)))  # 250KB/ページ仮定
+        
+        # モデル価格を取得
+        model_pricing = pricing_config.get(provider, {}).get(model, {"in": 0.003, "out": 0.015})
+        
+        # トークン数推定（ページあたり）
+        tokens_per_page_input = 1500  # 画像+プロンプト概算
+        tokens_per_page_output = 800  # レスポンス概算
+        
+        total_input_tokens = estimated_pages * tokens_per_page_input
+        total_output_tokens = estimated_pages * tokens_per_page_output
+        
+        # コスト計算
+        cost_usd = (total_input_tokens / 1000 * model_pricing["in"] + 
+                   total_output_tokens / 1000 * model_pricing["out"])
+        
+        return estimated_pages, cost_usd
+    
+    estimated_pages, estimate_cost_usd = calculate_flexible_estimate(
+        uploaded_file.size, provider, model, pricing
+    )
     estimate_cost_jpy = estimate_cost_usd * config.get_current_usd_to_jpy_rate()
     
-    # 概算コスト表示
-    st.info(f"📊 **概算**: {estimated_pages}ページ予想 / 概算費用: ¥{estimate_cost_jpy:.0f} (${estimate_cost_usd:.3f} USD)")
+    # 概算コスト表示（選択モデル情報付き）
+    current_model_display = f"{provider.title()} {model}"
+    st.info(f"📊 **概算** ({current_model_display}): {estimated_pages}ページ予想 / 概算費用: ¥{estimate_cost_jpy:.0f} (${estimate_cost_usd:.3f} USD)")
     
-    # Current model display
-    current_model_display = f"{st.session_state.llm_config['provider'].title()} {st.session_state.llm_config['model']}"
+    # 価格情報表示
+    if provider in pricing and model in pricing[provider]:
+        model_pricing = pricing[provider][model]
+        current_rate = config.get_current_usd_to_jpy_rate()
+        st.caption(f"💰 {current_model_display} 単価: 入力¥{model_pricing['in']*current_rate:.4f}/1kトークン, 出力¥{model_pricing['out']*current_rate:.4f}/1kトークン (為替レート: ¥{current_rate:.0f}/USD)")
+    
+    # Current model display (already defined above)
+    # current_model_display = f"{st.session_state.llm_config['provider'].title()} {st.session_state.llm_config['model']}"
     
     # 抽出開始ボタン
     st.divider()
@@ -394,14 +439,28 @@ if uploaded_file is not None:
                     help=f"✅ トークン使用量ベースの実際の費用です。\n\n計算値: ${processing_info['cost_usd']:.4f} USD\n{rate_info}\nClaude API利用料金×使用トークン数\n\n※ 為替レート変動により表示金額と請求額が異なる場合があります"
                 )
             else:
-                # フォールバック: モックデータまたは費用計算失敗時
+                # フォールバック: トークン情報不明時は概算表示
                 pages_processed = processing_info.get('pages_processed', max(1, len(df) // 5))
-                estimated_cost_jpy = pages_processed * 15  # 1ページあたり約15円の概算
+                
+                # 選択されたモデルの価格に基づく柔軟な概算
+                current_provider = st.session_state.llm_config.get('provider', 'anthropic')
+                current_model = st.session_state.llm_config.get('model', 'claude-sonnet-4-20250514')
+                
+                model_pricing = pricing.get(current_provider, {}).get(current_model, {'in': 0.003, 'out': 0.015})
+                
+                # より正確な概算（モデル価格ベース）
+                estimated_tokens_in = pages_processed * 1500  # 入力トークン推定
+                estimated_tokens_out = pages_processed * 800  # 出力トークン推定
+                estimated_cost_usd = (estimated_tokens_in / 1000 * model_pricing['in'] + 
+                                    estimated_tokens_out / 1000 * model_pricing['out'])
+                
+                current_rate = config.get_current_usd_to_jpy_rate()
+                estimated_cost_jpy = estimated_cost_usd * current_rate
                 
                 st.metric(
                     "API費用概算", 
                     f"¥{estimated_cost_jpy:.0f}",
-                    help=f"概算: {pages_processed}ページ × ¥15/ページ\n※実際の費用はトークン数により変動"
+                    help=f"概算 ({current_provider.title()} {current_model}): {pages_processed}ページ\n入力: {estimated_tokens_in}トークン, 出力: {estimated_tokens_out}トークン\n計算値: ${estimated_cost_usd:.4f} USD (為替: ¥{current_rate:.0f}/USD)\n\n※実際の費用はトークン数により変動します"
                 )
         
         # データプレビュー

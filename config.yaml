@@ -12,20 +12,25 @@ pdf:
 
 # LLM Provider Settings
 llm:
-  provider: anthropic         # "anthropic" | "gemini"
-  model: claude-3-5-sonnet-20240620   # Model name for selected provider
+  provider: anthropic         # "anthropic" | "gemini" | "openai"
+  model: claude-sonnet-4-20250514      # Latest Claude Sonnet 4 model
   temperature: 0.0
   right_col_zoom: false       # Right column zoom flag (moved from pdf section)
 
 # Pricing table (USD per token, editable)
 pricing:
   anthropic:
-    claude-3-5-sonnet-20240620: {in: 0.000003, out: 0.000015}
-    claude-3-5-haiku-20240307:  {in: 0.000001, out: 0.000005}
-    claude-sonnet-4-20250514:   {in: 0.000003, out: 0.000015}  # Legacy model
+    claude-3-5-sonnet-20240620: {in: 0.000003, out: 0.000015}  # Legacy
+    claude-3-5-haiku-20240307:  {in: 0.000001, out: 0.000005}  # Legacy
+    claude-sonnet-4-20250514:   {in: 0.000003, out: 0.000015}  # Latest Claude Sonnet 4
   gemini:
-    gemini-1.5-pro:   {in: 0.0000015, out: 0.000005}
-    gemini-1.5-flash: {in: 0.0000003, out: 0.0000006}
+    gemini-1.5-pro:   {in: 0.0000015, out: 0.000005}  # Legacy
+    gemini-1.5-flash: {in: 0.0000003, out: 0.0000006}  # Legacy
+    gemini-2.5-flash: {in: 0.0000003, out: 0.0000006}  # Latest Gemini 2.5 Flash
+    gemini-2.5-pro:   {in: 0.0000015, out: 0.000005}   # Latest Gemini 2.5 Pro
+  openai:
+    gpt-5:      {in: 0.000005, out: 0.000015}  # Latest GPT-5
+    gpt-5-mini: {in: 0.000001, out: 0.000003}  # Latest GPT-5 Mini
 
 # Legacy Claude API Settings (for backward compatibility)
 claude:

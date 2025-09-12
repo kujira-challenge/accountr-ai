@@ -84,11 +84,11 @@ class APIRetryConfig:
 
 def calculate_api_cost(model_name: str, usage) -> float:
     """
-    Calculate API cost based on usage and model pricing
+    Calculate API cost based on usage and model pricing (flexible for all providers)
     
     Args:
         model_name: Name of the model used
-        usage: API usage object with token counts
+        usage: API usage object with token counts (provider-agnostic)
         
     Returns:
         Cost in USD
@@ -97,25 +97,87 @@ def calculate_api_cost(model_name: str, usage) -> float:
     
     model = model_name.lower()
     
-    # Determine pricing based on model
-    if "gpt-4o" in model:
-        if "gpt-4o" in config.API_PRICES:
-            price_in = config.API_PRICES["gpt-4o"]["input"]
-            price_out = config.API_PRICES["gpt-4o"]["output"]
-            return (usage.prompt_tokens / 1000 * price_in + 
-                   usage.completion_tokens / 1000 * price_out)
-    elif "claude" in model:
-        pricing_key = None
-        if "claude-sonnet-4" in model or "claude-sonnet-4-0" in model:
-            pricing_key = "claude-sonnet-4-0"
-        elif "claude-3-5-sonnet" in model:
-            pricing_key = "claude-3-5-sonnet"
+    # Extract token counts (handle different provider formats)
+    input_tokens = 0
+    output_tokens = 0
+    
+    if hasattr(usage, 'input_tokens') and hasattr(usage, 'output_tokens'):
+        # Anthropic format
+        input_tokens = usage.input_tokens
+        output_tokens = usage.output_tokens
+    elif hasattr(usage, 'prompt_tokens') and hasattr(usage, 'completion_tokens'):
+        # OpenAI format
+        input_tokens = usage.prompt_tokens
+        output_tokens = usage.completion_tokens
+    elif hasattr(usage, 'prompt_token_count') and hasattr(usage, 'candidates_token_count'):
+        # Gemini format
+        input_tokens = usage.prompt_token_count
+        output_tokens = usage.candidates_token_count
+    else:
+        # Fallback: try common attribute names
+        for attr in ['input_tokens', 'prompt_tokens', 'tokens_in']:
+            if hasattr(usage, attr):
+                input_tokens = getattr(usage, attr, 0)
+                break
+        for attr in ['output_tokens', 'completion_tokens', 'candidates_token_count', 'tokens_out']:
+            if hasattr(usage, attr):
+                output_tokens = getattr(usage, attr, 0)
+                break
+    
+    # Flexible model pricing lookup
+    pricing = None
+    
+    # Try exact match first
+    if model in config.API_PRICES:
+        pricing = config.API_PRICES[model]
+    else:
+        # Try partial matches for various model families
+        for price_model, price_data in config.API_PRICES.items():
+            price_model_lower = price_model.lower()
             
-        if pricing_key and pricing_key in config.API_PRICES:
-            price_in = config.API_PRICES[pricing_key]["input"]
-            price_out = config.API_PRICES[pricing_key]["output"]
-            return (usage.input_tokens / 1000 * price_in + 
-                   usage.output_tokens / 1000 * price_out)
+            # Anthropic models
+            if ("claude" in model and "claude" in price_model_lower and
+                any(x in model for x in ["sonnet-4", "3-5-sonnet", "haiku"])):
+                if ("sonnet-4" in model and "sonnet-4" in price_model_lower) or \
+                   ("3-5-sonnet" in model and "3-5-sonnet" in price_model_lower) or \
+                   ("haiku" in model and "haiku" in price_model_lower):
+                    pricing = price_data
+                    break
+            
+            # Gemini models
+            elif ("gemini" in model and "gemini" in price_model_lower):
+                if ("2.5" in model and "2.5" in price_model_lower) or \
+                   ("1.5" in model and "1.5" in price_model_lower):
+                    if ("flash" in model and "flash" in price_model_lower) or \
+                       ("pro" in model and "pro" in price_model_lower):
+                        pricing = price_data
+                        break
+            
+            # OpenAI models
+            elif ("gpt" in model and "gpt" in price_model_lower):
+                if ("gpt-5" in model and "gpt-5" in price_model_lower) or \
+                   ("gpt-4" in model and "gpt-4" in price_model_lower):
+                    pricing = price_data
+                    break
+    
+    # Calculate cost if pricing found
+    if pricing and input_tokens > 0 and output_tokens > 0:
+        price_in = pricing.get("input", 0.003)  # Default fallback
+        price_out = pricing.get("output", 0.015)  # Default fallback
+        cost = (input_tokens / 1000 * price_in + output_tokens / 1000 * price_out)
+        
+        # Log cost calculation for debugging
+        from logging import getLogger
+        logger = getLogger(__name__)
+        logger.debug(f"Cost calculation: model={model_name}, in_tokens={input_tokens}, "
+                    f"out_tokens={output_tokens}, cost=${cost:.4f} USD")
+        
+        return cost
+    
+    # If no pricing found, log warning and return 0
+    from logging import getLogger
+    logger = getLogger(__name__)
+    logger.warning(f"No pricing found for model: {model_name}, returning $0.00 cost")
     
     return 0.0
 
