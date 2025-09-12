@@ -17,36 +17,42 @@ class GeminiProvider(LLMProvider):
         self.pr_in, self.pr_out = pricing_in, pricing_out
 
     def generate(self, system: str, user: str, images: List[bytes], model: str, temperature: float = 0.0) -> LLMResult:
-        mdl = genai.GenerativeModel(model_name=model)
-        parts = [system + "\n\n" + user]
-        for b in images:
-            parts.append(_to_blob(b))
-        
-        # Configure safety settings to be more permissive for business documents
-        safety_settings = [
-            {
-                "category": "HARM_CATEGORY_HARASSMENT",
-                "threshold": "BLOCK_ONLY_HIGH"
-            },
-            {
-                "category": "HARM_CATEGORY_HATE_SPEECH",
-                "threshold": "BLOCK_ONLY_HIGH"
-            },
-            {
-                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                "threshold": "BLOCK_ONLY_HIGH"
-            },
-            {
-                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "threshold": "BLOCK_ONLY_HIGH"
-            }
-        ]
-        
-        resp = mdl.generate_content(
-            parts,
-            generation_config={"temperature": temperature, "max_output_tokens": 4096},
-            safety_settings=safety_settings
-        )
+        try:
+            mdl = genai.GenerativeModel(model_name=model)
+            parts = [system + "\n\n" + user]
+            for b in images:
+                parts.append(_to_blob(b))
+            
+            # Configure safety settings to be more permissive for business documents
+            safety_settings = [
+                {
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "threshold": "BLOCK_ONLY_HIGH"
+                },
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH",
+                    "threshold": "BLOCK_ONLY_HIGH"
+                },
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_ONLY_HIGH"
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_ONLY_HIGH"
+                }
+            ]
+            
+            resp = mdl.generate_content(
+                parts,
+                generation_config={"temperature": temperature, "max_output_tokens": 4096},
+                safety_settings=safety_settings
+            )
+        except Exception as api_error:
+            log.error(f"Gemini API call failed with error: {api_error}")
+            # Return fallback response for any API errors
+            txt = '[{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"Gemini API呼び出し失敗【手動確認必要】"}]'
+            return LLMResult(text=txt, tokens_in=0, tokens_out=0, cost_usd=0.0)
         
         # Handle different finish reasons
         if resp.candidates:
