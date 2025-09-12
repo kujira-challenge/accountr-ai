@@ -673,12 +673,36 @@ class ProductionPDFExtractor:
                 img_data = base64.b64decode(img_b64)
                 img = Image.open(io.BytesIO(img_data))
                 
-                # Convert to JPEG
-                jpeg_buffer = io.BytesIO()
-                if img.mode in ("RGBA", "LA", "P"):
-                    img = img.convert("RGB")
-                img.save(jpeg_buffer, format="JPEG", quality=90)
-                jpeg_data = jpeg_buffer.getvalue()
+                # Provider-specific image optimization
+                if self.provider_name == "gemini":
+                    # Gemini optimization: smaller size, lower quality
+                    original_size = img.size
+                    max_dimension = 1024  # Reduce max dimension for Gemini
+                    
+                    # Calculate new size maintaining aspect ratio
+                    if max(original_size) > max_dimension:
+                        ratio = max_dimension / max(original_size)
+                        new_size = (int(original_size[0] * ratio), int(original_size[1] * ratio))
+                        img = img.resize(new_size, Image.Resampling.LANCZOS)
+                        logger.info(f"Gemini image optimization: {original_size} -> {new_size}")
+                    
+                    # Convert to JPEG with lower quality for Gemini
+                    jpeg_buffer = io.BytesIO()
+                    if img.mode in ("RGBA", "LA", "P"):
+                        img = img.convert("RGB")
+                    img.save(jpeg_buffer, format="JPEG", quality=75, optimize=True)
+                    jpeg_data = jpeg_buffer.getvalue()
+                    
+                else:
+                    # Standard conversion for other providers
+                    jpeg_buffer = io.BytesIO()
+                    if img.mode in ("RGBA", "LA", "P"):
+                        img = img.convert("RGB")
+                    img.save(jpeg_buffer, format="JPEG", quality=90)
+                    jpeg_data = jpeg_buffer.getvalue()
+                
+                # Log image size for debugging
+                logger.debug(f"Image size after conversion: {len(jpeg_data)} bytes ({self.provider_name})")
                 
                 # Re-encode to base64
                 jpeg_b64 = base64.b64encode(jpeg_data)
@@ -873,7 +897,32 @@ class ProductionPDFExtractor:
         return mock_entries
     
     def _get_system_prompt(self) -> str:
-        """強化システムプロンプト（オブジェクト配列強制・貸借ペア保証・摘要統一・右列強化）"""
+        """プロバイダーに最適化されたシステムプロンプト"""
+        if self.provider_name == "gemini":
+            return self._get_gemini_optimized_prompt()
+        else:
+            return self._get_standard_system_prompt()
+    
+    def _get_gemini_optimized_prompt(self) -> str:
+        """Gemini API最適化版プロンプト（短縮版）"""
+        return """不動産伝票PDFからJSON配列で会計データを抽出してください。
+
+出力形式：
+- JSONオブジェクト配列のみ
+- 5キー必須: ["伝票日付","借貸区分","科目名","金額","摘要"]
+- 説明文・コードブロック禁止
+
+形式例：
+[{"伝票日付":"2024/2/1","借貸区分":"借方","科目名":"現金","金額":1000,"摘要":"賃料収入"}]
+
+ルール：
+- 左=借方、右=貸方
+- 各取引は借方・貸方ペアで出力
+- 不明は空文字（科目名のみ）
+- 抽出不能時も1要素返す"""
+    
+    def _get_standard_system_prompt(self) -> str:
+        """標準システムプロンプト（Anthropic/OpenAI用）"""
         return """あなたは「帳票OCR変換器（監査人視点）」です。A4の不動産伝票PDF（退去・振替・更新・新規など）から【オブジェクトの配列】をJSON形式で出力してください。
 
 ★★重要★★ 貸方科目名の不明返却は禁止。読めない場合は候補集合から最尤を必ず選択してください。右列=貸方です。左右を取り違えないでください。
