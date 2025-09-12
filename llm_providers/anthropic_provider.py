@@ -12,32 +12,51 @@ class AnthropicProvider(LLMProvider):
         self.pr_in, self.pr_out = pricing_in, pricing_out
 
     def generate(self, system: str, user: str, images: List[bytes], model: str, temperature: float = 0.0) -> LLMResult:
-        content = [{"type": "text", "text": user}]
-        for b in images:
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/jpeg",
-                    "data": b.decode("utf-8")
-                }
-            })
-        
-        resp = self.client.messages.create(
-            model=model,
-            system=system,
-            messages=[{"role": "user", "content": content}],
-            temperature=temperature,
-            max_tokens=4096
-        )
-        
-        tin = getattr(resp.usage, "input_tokens", 0) or 0
-        tout = getattr(resp.usage, "output_tokens", 0) or 0
-        cost = tin * self.pr_in + tout * self.pr_out
-        
-        return LLMResult(
-            text=resp.content[0].text if resp.content else "",
-            tokens_in=tin,
-            tokens_out=tout,
-            cost_usd=cost
-        )
+        try:
+            content = [{"type": "text", "text": user}]
+            for b in images:
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": b.decode("utf-8")
+                    }
+                })
+            
+            resp = self.client.messages.create(
+                model=model,
+                system=system,
+                messages=[{"role": "user", "content": content}],
+                temperature=temperature,
+                max_tokens=4096
+            )
+            
+            # Safe token count extraction
+            tin = getattr(resp.usage, "input_tokens", 0) or 0
+            tout = getattr(resp.usage, "output_tokens", 0) or 0
+            cost = tin * self.pr_in + tout * self.pr_out
+            
+            # Safe text extraction with fallback
+            try:
+                text = resp.content[0].text if resp.content and len(resp.content) > 0 else ""
+            except (IndexError, AttributeError) as e:
+                log.warning(f"Failed to extract text from Anthropic response: {e}")
+                text = '[{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"Anthropicレスポンス抽出失敗【手動確認必要】"}]'
+            
+            return LLMResult(
+                text=text,
+                tokens_in=tin,
+                tokens_out=tout,
+                cost_usd=cost
+            )
+            
+        except Exception as e:
+            log.error(f"Anthropic API call failed: {e}")
+            # Return fallback response for any API errors
+            return LLMResult(
+                text='[{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"Anthropic API呼び出し失敗【手動確認必要】"}]',
+                tokens_in=0,
+                tokens_out=0,
+                cost_usd=0.0
+            )

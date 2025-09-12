@@ -759,10 +759,10 @@ class ProductionPDFExtractor:
         except Exception as e:
             logger.error(f"{self.provider_name} API call failed: {e}")
             
-            # For Gemini, check if this is the specific finish_reason issue and provide fallback
-            if self.provider_name == "gemini" and "finish_reason" in str(e):
-                logger.warning("Gemini finish_reason issue detected, providing fallback response")
-                fallback_response = '[{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"Gemini処理制限により抽出中断【手動確認必要】"}]'
+            # For all providers, if this is a known recoverable error, provide fallback
+            if any(keyword in str(e).lower() for keyword in ["finish_reason", "response.text", "content", "choices"]):
+                logger.warning(f"{self.provider_name} recoverable error detected, providing fallback response")
+                fallback_response = f'[{{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"{self.provider_name}処理制限により抽出中断【手動確認必要】"}}]'
                 return fallback_response, 0.0
             
             raise
