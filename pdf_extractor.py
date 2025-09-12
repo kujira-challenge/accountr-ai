@@ -555,8 +555,8 @@ class ProductionPDFExtractor:
             for page_idx in range(1, len(images_b64) + 1):
                 user_prompt += f"ページ{page_idx}：左=借方｜中央=摘要｜右=貸方（列を取り違えないでください）\n"
             
-            # Claude Sonnet 4.0 API呼び出し（JSON抽出ガード付き）
-            response_text, cost_usd = self._call_claude_api(system_prompt, user_prompt, images_b64)
+            # Primary LLM API呼び出し（JSON抽出ガード付き・フォールバック機能付き）
+            response_text, cost_usd = self._call_llm_with_fallback(system_prompt, user_prompt, images_b64)
             
             # JSON抽出ガードを使用してパース
             from utils.json_guard import parse_5cols_json, get_fallback_entry
@@ -569,7 +569,7 @@ class ProductionPDFExtractor:
                 logger.info("短縮プロンプトで1回リトライ")
                 try:
                     retry_system = "出力はJSON配列のみ。各要素は5カラム（伝票日付/借貸区分/科目名/金額/摘要）。余計な文字・コードフェンス禁止。"
-                    retry_response, retry_cost = self._call_claude_api(retry_system, user_prompt, images_b64)
+                    retry_response, retry_cost = self._call_llm_with_fallback(retry_system, user_prompt, images_b64)
                     cost_usd += retry_cost
                     extracted_data = parse_5cols_json(retry_response)
                     logger.info(f"リトライ成功: {len(extracted_data)}エントリ")
@@ -657,6 +657,61 @@ class ProductionPDFExtractor:
         from utils.masking import mask_list_for_logging
         return mask_list_for_logging(data, sample_size=2)
     
+    def _call_llm_with_fallback(self, system_prompt: str, user_prompt: str, images_b64: List[str]) -> Tuple[str, float]:
+        """Call primary LLM with Anthropic fallback for non-Anthropic providers"""
+        try:
+            # Primary LLM attempt
+            result = self.llm_provider.generate(
+                system=system_prompt,
+                user=user_prompt,
+                images=images_b64,
+                model=self.model_name,
+                temperature=self.temperature
+            )
+            
+            response_text = result.text.strip()
+            logger.info(f"{self.provider_name} primary success: {len(response_text)} chars, cost=${result.cost_usd:.4f}")
+            return response_text, result.cost_usd
+            
+        except Exception as primary_error:
+            logger.error(f"Primary LLM failed ({self.provider_name}={self.model_name}): {primary_error}")
+            
+            # Fallback to Anthropic if primary provider is not Anthropic
+            if self.provider_name != "anthropic":
+                logger.warning(f"Attempting Anthropic fallback for failed {self.provider_name}")
+                try:
+                    from llm_providers.factory import build as build_llm
+                    
+                    # Load pricing for Anthropic fallback
+                    fallback_pricing = self.pricing.get("anthropic", {}).get("claude-sonnet-4-20250514", {"in": 0.003, "out": 0.015})
+                    
+                    # Create Anthropic provider
+                    anthropic_provider = build_llm("anthropic", "claude-sonnet-4-20250514", {"anthropic": {"claude-sonnet-4-20250514": fallback_pricing}})
+                    
+                    # Attempt with Anthropic
+                    result = anthropic_provider.generate(
+                        system=system_prompt,
+                        user=user_prompt,
+                        images=images_b64,
+                        model="claude-sonnet-4-20250514",
+                        temperature=self.temperature
+                    )
+                    
+                    response_text = result.text.strip()
+                    logger.info(f"Anthropic fallback success: {len(response_text)} chars, cost=${result.cost_usd:.4f}")
+                    return response_text, result.cost_usd
+                    
+                except Exception as fallback_error:
+                    logger.error(f"Anthropic fallback also failed: {fallback_error}")
+                    # Final fallback - return structured dummy response
+                    fallback_response = '[{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"全LLMプロバイダ失敗【手動確認必要】"}]'
+                    return fallback_response, 0.0
+            else:
+                # Primary was already Anthropic, no fallback available
+                logger.error("Anthropic primary failed and no fallback available")
+                fallback_response = '[{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"Anthropic処理失敗【手動確認必要】"}]'
+                return fallback_response, 0.0
+
     def _call_claude_api(self, system_prompt: str, user_prompt: str, images_b64: List[str]) -> Tuple[str, float]:
         """Call LLM API with system prompt and images using provider abstraction"""
         try:
@@ -911,21 +966,25 @@ class ProductionPDFExtractor:
             return self._get_standard_system_prompt()
     
     def _get_gemini_optimized_prompt(self) -> str:
-        """Gemini API最適化版プロンプト（短縮版）"""
-        return """不動産伝票PDFからJSON配列で会計データを抽出してください。
+        """Gemini API最適化版プロンプト（安全性ガードレール付き）"""
+        return """ユーザー提供の帳票画像から、構造化（5カラムJSON）だけを返してください。本文の逐語引用は禁止。
 
-出力形式：
+【抽出目的】
+構造化会計データ抽出のみ。個人情報の長文引用を避け、必要最小限で記載。読めない場合は【OCR注意】とする。
+
+【出力形式】
 - JSONオブジェクト配列のみ
 - 5キー必須: ["伝票日付","借貸区分","科目名","金額","摘要"]
 - 説明文・コードブロック禁止
 
-形式例：
+【形式例】
 [{"伝票日付":"2024/2/1","借貸区分":"借方","科目名":"現金","金額":1000,"摘要":"賃料収入"}]
 
-ルール：
-- 左=借方、右=貸方
+【抽出ルール】
+- 左列=借方、右列=貸方
 - 各取引は借方・貸方ペアで出力
-- 不明は空文字（科目名のみ）
+- 不明科目は空文字
+- 個人名は姓のみ略記可
 - 抽出不能時も1要素返す"""
     
     def _get_standard_system_prompt(self) -> str:
