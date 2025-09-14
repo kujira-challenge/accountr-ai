@@ -17,7 +17,13 @@ from pathlib import Path
 
 # ローカルモジュール
 from backend_processor import process_pdf_to_csv
-from config import config
+# Import config safely with fallback
+try:
+    from config import config
+except (ImportError, AttributeError) as config_error:
+    st.error(f"⚠️ Configuration loading error: {config_error}")
+    st.info("Please check your configuration files and restart the app.")
+    st.stop()
 import yaml
 
 # ページ設定
@@ -157,10 +163,10 @@ with st.sidebar:
                 st.warning("Settings > Secrets でANTHROPIC_API_KEYを設定してください")
         elif provider == "gemini":
             try:
-                from config import config
                 api_key = config.GOOGLE_API_KEY
-            except (AttributeError, ImportError):
+            except AttributeError:
                 # Fallback to direct environment access
+                import os
                 api_key = os.environ.get("GOOGLE_API_KEY")
             
             if api_key:
@@ -209,16 +215,22 @@ with col2:
 # APIキーチェック
 current_provider = st.session_state.llm_config.get("provider", "anthropic")
 if current_provider == "anthropic":
-    if not config.ANTHROPIC_API_KEY or config.ANTHROPIC_API_KEY == 'DUMMY_API_KEY':
-        st.error("🚫 Anthropic APIキーが設定されていません")
-        st.info("📝 デプロイ後の設定が必要です。README.mdの手順に従ってAPIキーを設定してください。")
+    try:
+        anthropic_key = config.ANTHROPIC_API_KEY
+        if not anthropic_key or anthropic_key == 'DUMMY_API_KEY':
+            st.error("🚫 Anthropic APIキーが設定されていません")
+            st.info("📝 デプロイ後の設定が必要です。README.mdの手順に従ってAPIキーを設定してください。")
+            st.stop()
+    except AttributeError:
+        st.error("🚫 Configuration error: ANTHROPIC_API_KEY property not available")
+        st.info("Please check your config.py file and restart the app.")
         st.stop()
 elif current_provider == "gemini":
     try:
-        from config import config
         google_api_key = config.GOOGLE_API_KEY
-    except (AttributeError, ImportError):
+    except AttributeError:
         # Fallback to direct environment access
+        import os
         google_api_key = os.environ.get("GOOGLE_API_KEY")
     
     if not google_api_key:

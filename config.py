@@ -522,9 +522,6 @@ def print_config_summary():
     print(f"\n🚀 Production Ready: {'YES' if Config.is_production_ready() else 'NO'}")
     print("=" * 60)
 
-# Create global config instance
-config = Config()
-
 if __name__ == "__main__":
     print_config_summary()
     validate_config()
