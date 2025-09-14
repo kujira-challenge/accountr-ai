@@ -759,8 +759,8 @@ class ProductionPDFExtractor:
                 # Log image size for debugging
                 logger.debug(f"Image size after conversion: {len(jpeg_data)} bytes ({self.provider_name})")
                 
-                # Re-encode to base64
-                jpeg_b64 = base64.b64encode(jpeg_data)
+                # Re-encode to base64 as string
+                jpeg_b64 = base64.b64encode(jpeg_data).decode('utf-8')
                 images_jpeg_b64.append(jpeg_b64)
             
             # Use the LLM provider abstraction

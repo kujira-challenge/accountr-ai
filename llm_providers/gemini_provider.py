@@ -13,9 +13,12 @@ JSON_SYSTEM_GUARD = (
     "Do NOT quote long texts. Return ONLY JSON (array of objects) with the specified schema."
 )
 
-def _to_blob(b64jpeg: bytes):
-    """Convert base64 JPEG bytes to Gemini blob format"""
-    raw = base64.b64decode(b64jpeg)
+def _to_blob(b64jpeg):
+    """Convert base64 JPEG (string or bytes) to Gemini blob format"""
+    if isinstance(b64jpeg, str):
+        raw = base64.b64decode(b64jpeg)
+    else:
+        raw = base64.b64decode(b64jpeg)
     return {"mime_type": "image/jpeg", "data": raw}
 
 def _first_text(resp):
