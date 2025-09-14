@@ -205,7 +205,7 @@ class ProductionPDFExtractor:
         self.api_provider = self.provider_name
         self.api_key = api_key or (
             config.ANTHROPIC_API_KEY if self.provider_name == "anthropic" 
-            else os.environ.get("GOOGLE_API_KEY")
+            else config.GOOGLE_API_KEY
         )
         self.max_tokens = 4096
             

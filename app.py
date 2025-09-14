@@ -156,8 +156,8 @@ with st.sidebar:
                 st.error("❌ Anthropic APIキーが未設定")
                 st.warning("Settings > Secrets でANTHROPIC_API_KEYを設定してください")
         elif provider == "gemini":
-            import os
-            api_key = os.environ.get("GOOGLE_API_KEY")
+            from config import config
+            api_key = config.GOOGLE_API_KEY
             if api_key:
                 st.success("✅ Gemini API接続準備完了")
             else:
@@ -209,8 +209,8 @@ if current_provider == "anthropic":
         st.info("📝 デプロイ後の設定が必要です。README.mdの手順に従ってAPIキーを設定してください。")
         st.stop()
 elif current_provider == "gemini":
-    import os
-    if not os.environ.get("GOOGLE_API_KEY"):
+    from config import config
+    if not config.GOOGLE_API_KEY:
         st.error("🚫 Gemini APIキーが設定されていません")
         st.info("📝 デプロイ後の設定が必要です。Streamlit SecretsでGOOGLE_API_KEYを設定してください。")
         st.stop()

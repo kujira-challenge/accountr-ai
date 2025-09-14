@@ -12,8 +12,8 @@ pdf:
 
 # LLM Provider Settings
 llm:
-  provider: gemini            # "anthropic" | "gemini" | "openai"
-  model: gemini-2.5-flash     # Latest Gemini 2.5 Flash (fastest, most cost-effective)
+  provider: anthropic         # "anthropic" | "gemini" | "openai"  
+  model: claude-sonnet-4-20250514      # Latest Claude Sonnet 4 model (stable)
   temperature: 0.0
   right_col_zoom: false       # Right column zoom flag (moved from pdf section)
 

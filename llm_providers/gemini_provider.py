@@ -37,7 +37,18 @@ def _first_text(resp):
 
 class GeminiProvider(LLMProvider):
     def __init__(self, pricing_in: float, pricing_out: float):
-        genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
+        # Try to import config and get API key through proper secrets management
+        try:
+            from config import config
+            api_key = config.GOOGLE_API_KEY
+        except:
+            # Fallback to environment variable
+            api_key = os.environ.get("GOOGLE_API_KEY")
+        
+        if not api_key:
+            raise ValueError("GOOGLE_API_KEY is required for Gemini provider. Set it in Streamlit secrets or environment variables.")
+        
+        genai.configure(api_key=api_key)
         self.pr_in, self.pr_out = pricing_in, pricing_out
 
     def _call(self, model: str, system: str, user: str, images_b64: List[bytes], *, json_mode: bool = False, max_out: int = 2048):

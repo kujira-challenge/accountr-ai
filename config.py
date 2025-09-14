@@ -77,21 +77,40 @@ class Config:
     # Anthropic Claude API (Claude Sonnet 4.0) - メインAPI
     @classmethod
     def _get_secret(cls, key: str, default: str = None) -> str:
-        """Get secret from Streamlit secrets or environment variables"""
+        """Get secret from Streamlit secrets, TOML file, or environment variables"""
+        # First try Streamlit secrets if available
         if STREAMLIT_AVAILABLE:
             try:
                 return st.secrets.get(key, os.getenv(key, default))
             except:
-                return os.getenv(key, default)
+                pass
+        
+        # Try loading from .streamlit/secrets.toml directly
+        try:
+            import toml
+            secrets_path = Path(__file__).parent / ".streamlit" / "secrets.toml"
+            if secrets_path.exists():
+                secrets_data = toml.load(secrets_path)
+                if key in secrets_data:
+                    return secrets_data[key]
+        except Exception:
+            pass
+        
+        # Fallback to environment variables
         return os.getenv(key, default)
     
     @property
     def ANTHROPIC_API_KEY(self) -> str:
         return self._get_secret('ANTHROPIC_API_KEY')
     
+    @property 
+    def GOOGLE_API_KEY(self) -> str:
+        """Get Google API key from Streamlit secrets or environment variables"""
+        return self._get_secret('GOOGLE_API_KEY')
+    
     ANTHROPIC_MODEL = os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-20250514')
     ANTHROPIC_MAX_TOKENS = int(os.getenv('ANTHROPIC_MAX_TOKENS', '64000'))
-    ANTHROPIC_BETA_HEADERS = os.getenv('ANTHROPIC_BETA_HEADERS', 'context-1m-2025-08-07')
+    ANTHROPIC_BETA_HEADERS = os.getenv('ANTHROPIC_BETA_HEADERS', 'context-1m-2025-2025-08-07')
     
     # OCR.space API
     OCR_SPACE_API_KEY = os.getenv('OCR_SPACE_API_KEY')
