@@ -123,7 +123,7 @@ class Config:
     # API Rate Limiting
     API_REQUEST_INTERVAL = float(os.getenv('API_REQUEST_INTERVAL', '2'))
     MAX_RETRIES = int(os.getenv('MAX_RETRIES', '1'))  # 1回リトライのみ
-    REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '60'))
+    REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '120'))  # Increased timeout for Gemini JSON mode retries
     
     # OCR Settings
     OCR_LANGUAGES = os.getenv('OCR_LANGUAGES', 'jpn+eng')

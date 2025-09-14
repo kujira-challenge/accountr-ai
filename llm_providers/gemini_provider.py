@@ -62,28 +62,49 @@ class GeminiProvider(LLMProvider):
         
         if json_mode:
             gen_cfg["response_mime_type"] = "application/json"
-            # Optional JSON schema enforcement (SDK-dependent)
+            # Optional JSON schema enforcement (SDK version dependent)
             try:
-                gen_cfg["response_schema"] = gtypes.Schema(
-                    type=gtypes.Type.ARRAY,
-                    items=gtypes.Schema(
-                        type=gtypes.Type.OBJECT,
-                        properties={
-                            "伝票日付": gtypes.Schema(type=gtypes.Type.STRING),
-                            "借貸区分": gtypes.Schema(type=gtypes.Type.STRING),
-                            "科目名":   gtypes.Schema(type=gtypes.Type.STRING),
-                            "金額":     gtypes.Schema(type=gtypes.Type.INTEGER),
-                            "摘要":     gtypes.Schema(type=gtypes.Type.STRING),
-                        },
-                        required=["伝票日付", "借貸区分", "科目名", "金額", "摘要"]
+                # Check if Schema is available in the current SDK version
+                if hasattr(gtypes, 'Schema') and hasattr(gtypes, 'Type'):
+                    gen_cfg["response_schema"] = gtypes.Schema(
+                        type=gtypes.Type.ARRAY,
+                        items=gtypes.Schema(
+                            type=gtypes.Type.OBJECT,
+                            properties={
+                                "伝票日付": gtypes.Schema(type=gtypes.Type.STRING),
+                                "借貸区分": gtypes.Schema(type=gtypes.Type.STRING),
+                                "科目名":   gtypes.Schema(type=gtypes.Type.STRING),
+                                "金額":     gtypes.Schema(type=gtypes.Type.INTEGER),
+                                "摘要":     gtypes.Schema(type=gtypes.Type.STRING),
+                            },
+                            required=["伝票日付", "借貸区分", "科目名", "金額", "摘要"]
+                        )
                     )
-                )
-                log.info("Gemini JSON schema enforcement enabled")
+                    log.info("Gemini JSON schema enforcement enabled")
+                else:
+                    log.info("Gemini JSON schema not available in this SDK version, using MIME type only")
             except Exception as schema_error:
-                log.warning(f"Gemini JSON schema not supported: {schema_error}")
+                log.warning(f"Gemini JSON schema setup failed: {schema_error} - using MIME type only")
 
         mdl = genai.GenerativeModel(model_name=model, safety_settings=safety)
-        resp = mdl.generate_content(parts, generation_config=gen_cfg)
+        
+        # Add request timeout and retry logic
+        import time
+        max_retries = 2
+        base_timeout = 30  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                # Set reasonable timeout for API call
+                resp = mdl.generate_content(parts, generation_config=gen_cfg, request_options={"timeout": base_timeout * (attempt + 1)})
+                break  # Success, exit retry loop
+            except Exception as call_error:
+                if attempt == max_retries - 1:
+                    # Final attempt failed
+                    raise call_error
+                else:
+                    log.warning(f"Gemini API call attempt {attempt + 1} failed: {call_error}, retrying in {2 ** attempt}s")
+                    time.sleep(2 ** attempt)  # Exponential backoff
 
         # Extract usage metadata (handle missing metadata gracefully)
         meta = getattr(resp, "usage_metadata", None)
@@ -97,38 +118,48 @@ class GeminiProvider(LLMProvider):
 
     def generate(self, system: str, user: str, images: List[bytes], model: str, temperature: float = 0.0) -> LLMResult:
         """Generate with comprehensive robustness and multi-step fallback"""
+        total_tin, total_tout = 0, 0
+        
         try:
             # Step 1: Normal mode attempt
             log.info(f"Gemini Step 1: Normal mode with {model}")
             resp, tin, tout = self._call(model, system, user, images, json_mode=False, max_out=2048)
             text = _first_text(resp)
+            total_tin, total_tout = tin, tout
 
             # Step 2: If empty parts, try JSON mode with increased tokens
             if not text:
                 finish_reason = getattr(getattr(resp, "candidates", [{}])[0], "finish_reason", "unknown")
                 log.warning(f"Gemini empty parts: finish_reason={finish_reason}, retrying with JSON mode")
                 
-                resp, tin2, tout2 = self._call(model, system, user, images, json_mode=True, max_out=4096)
-                text = _first_text(resp)
-                tin, tout = tin + tin2, tout + tout2
+                try:
+                    resp, tin2, tout2 = self._call(model, system, user, images, json_mode=True, max_out=4096)
+                    text = _first_text(resp)
+                    total_tin, total_tout = total_tin + tin2, total_tout + tout2
+                    log.info(f"Gemini JSON mode retry completed: text_length={len(text or '')}")
+                except Exception as json_retry_error:
+                    log.error(f"Gemini JSON mode retry failed: {json_retry_error}")
+                    # Don't re-raise here, continue to Step 3 check
 
             # Step 3: If still empty, raise explicit exception for upstream fallback
             if not text:
                 final_reason = getattr(getattr(resp, "candidates", [{}])[0], "finish_reason", "unknown")
-                log.error(f"Gemini completely failed: finish_reason={final_reason}")
-                raise RuntimeError(f"Gemini returned no content parts (finish_reason={final_reason})")
+                log.error(f"Gemini completely failed after all retries: finish_reason={final_reason}")
+                raise RuntimeError(f"Gemini returned no content parts after retries (finish_reason={final_reason})")
 
             # Success - calculate cost and return
-            cost = tin * self.pr_in + tout * self.pr_out
-            log.info(f"Gemini success: {len(text)} chars, tokens_in={tin}, tokens_out={tout}, cost=${cost:.4f}")
+            cost = total_tin * self.pr_in + total_tout * self.pr_out
+            log.info(f"Gemini success: {len(text)} chars, tokens_in={total_tin}, tokens_out={total_tout}, cost=${cost:.4f}")
             
             return LLMResult(
                 text=text,
-                tokens_in=tin,
-                tokens_out=tout,
+                tokens_in=total_tin,
+                tokens_out=total_tout,
                 cost_usd=cost
             )
 
         except Exception as e:
-            log.error(f"Gemini provider failed: {e}")
+            # Calculate cost even on failure for accurate tracking
+            cost = total_tin * self.pr_in + total_tout * self.pr_out
+            log.error(f"Gemini provider failed: {e} (cost so far: ${cost:.4f})")
             raise  # Re-raise for upstream fallback handling
