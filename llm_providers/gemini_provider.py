@@ -130,7 +130,7 @@ class GeminiProvider(LLMProvider):
 
         return resp, tin, tout
 
-    def generate(self, system: str, user: str, images: List[bytes], model: str, temperature: float = 0.0) -> LLMResult:
+    def generate(self, system: str, user: str, images: List, model: str, temperature: float = 0.0) -> LLMResult:
         """Generate with comprehensive robustness and multi-step fallback"""
         total_tin, total_tout = 0, 0
         

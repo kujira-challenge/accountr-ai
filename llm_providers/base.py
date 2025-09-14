@@ -9,5 +9,5 @@ class LLMResult:
     cost_usd: float
 
 class LLMProvider:
-    def generate(self, system: str, user: str, images: List[bytes], model: str, temperature: float = 0.0) -> LLMResult:
+    def generate(self, system: str, user: str, images: List, model: str, temperature: float = 0.0) -> LLMResult:
         raise NotImplementedError

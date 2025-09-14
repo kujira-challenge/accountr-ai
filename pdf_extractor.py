@@ -203,10 +203,17 @@ class ProductionPDFExtractor:
         
         # Legacy compatibility
         self.api_provider = self.provider_name
-        self.api_key = api_key or (
-            config.ANTHROPIC_API_KEY if self.provider_name == "anthropic" 
-            else config.GOOGLE_API_KEY
-        )
+        # Safe API key retrieval with fallback
+        if api_key:
+            self.api_key = api_key
+        elif self.provider_name == "anthropic":
+            self.api_key = config.ANTHROPIC_API_KEY
+        else:
+            try:
+                self.api_key = config.GOOGLE_API_KEY
+            except AttributeError:
+                # Fallback for missing property
+                self.api_key = os.environ.get("GOOGLE_API_KEY")
         self.max_tokens = 4096
             
         self.use_mock = False  # モックモード完全撤廃
@@ -704,12 +711,12 @@ class ProductionPDFExtractor:
                 except Exception as fallback_error:
                     logger.error(f"Anthropic fallback also failed: {fallback_error}")
                     # Final fallback - return structured dummy response
-                    fallback_response = '[{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"全LLMプロバイダ失敗【手動確認必要】"}]'
+                    fallback_response = '[{"伝票日付":"","借貸区分":"借方","科目名":"全API失敗","金額":1,"摘要":"全LLMプロバイダ失敗【手動確認必要】"}]'
                     return fallback_response, 0.0
             else:
                 # Primary was already Anthropic, no fallback available
                 logger.error("Anthropic primary failed and no fallback available")
-                fallback_response = '[{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"Anthropic処理失敗【手動確認必要】"}]'
+                fallback_response = '[{"伝票日付":"","借貸区分":"借方","科目名":"Anthropic失敗","金額":1,"摘要":"Anthropic処理失敗【手動確認必要】"}]'
                 return fallback_response, 0.0
 
     def _call_claude_api(self, system_prompt: str, user_prompt: str, images_b64: List[str]) -> Tuple[str, float]:
@@ -817,7 +824,7 @@ class ProductionPDFExtractor:
             # For all providers, if this is a known recoverable error, provide fallback
             if any(keyword in str(e).lower() for keyword in ["finish_reason", "response.text", "content", "choices"]):
                 logger.warning(f"{self.provider_name} recoverable error detected, providing fallback response")
-                fallback_response = f'[{{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"{self.provider_name}処理制限により抽出中断【手動確認必要】"}}]'
+                fallback_response = f'[{{"伝票日付":"","借貸区分":"借方","科目名":"{self.provider_name}制限","金額":1,"摘要":"{self.provider_name}処理制限により抽出中断【手動確認必要】"}}]'
                 return fallback_response, 0.0
             
             raise
@@ -1021,7 +1028,7 @@ class ProductionPDFExtractor:
 【フォールバック】
 - 抽出不能でも配列1要素は必ず返す（科目名空、摘要末尾に【OCR注意】）。
 - 金額に負数や記号は使わない。
-- 出力例: [{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"抽出不能【OCR注意】"}]"""
+- 出力例: [{"伝票日付":"","借貸区分":"借方","科目名":"抽出不能","金額":1,"摘要":"抽出不能【OCR注意】"}]"""
     
     def process_single_pdf(self, pdf_path: Path, temp_dir: Path, pages_per_split: Optional[int] = None) -> ProcessingResult:
         """

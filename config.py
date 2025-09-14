@@ -519,8 +519,11 @@ def print_config_summary():
     print(f"  - Log File: {config.LOG_FILE_PATH}")
     print(f"  - Mask API Keys: {'ON' if config.MASK_API_KEYS_IN_LOGS else 'OFF'}")
     
-    print(f"\n🚀 Production Ready: {'YES' if config.is_production_ready() else 'NO'}")
+    print(f"\n🚀 Production Ready: {'YES' if Config.is_production_ready() else 'NO'}")
     print("=" * 60)
+
+# Create global config instance
+config = Config()
 
 if __name__ == "__main__":
     print_config_summary()

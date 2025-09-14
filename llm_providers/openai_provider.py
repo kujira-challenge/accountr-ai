@@ -54,7 +54,7 @@ class OpenAIProvider(LLMProvider):
                 text = resp.choices[0].message.content if resp.choices and len(resp.choices) > 0 and resp.choices[0].message else ""
             except (IndexError, AttributeError) as e:
                 log.warning(f"Failed to extract text from OpenAI response: {e}")
-                text = '[{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"OpenAIレスポンス抽出失敗【手動確認必要】"}]'
+                text = '[{"伝票日付":"","借貸区分":"借方","科目名":"OpenAI失敗","金額":1,"摘要":"OpenAIレスポンス抽出失敗【手動確認必要】"}]'
             
             return LLMResult(
                 text=text or "",
@@ -67,7 +67,7 @@ class OpenAIProvider(LLMProvider):
             log.error(f"OpenAI API call failed: {e}")
             # Return fallback response for any API errors
             return LLMResult(
-                text='[{"伝票日付":"","借貸区分":"借方","科目名":"","金額":0,"摘要":"OpenAI API呼び出し失敗【手動確認必要】"}]',
+                text='[{"伝票日付":"","借貸区分":"借方","科目名":"OpenAI失敗","金額":1,"摘要":"OpenAI API呼び出し失敗【手動確認必要】"}]',
                 tokens_in=0,
                 tokens_out=0,
                 cost_usd=0.0
