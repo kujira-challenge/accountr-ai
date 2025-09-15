@@ -42,8 +42,9 @@ class GeminiProvider(LLMProvider):
     def __init__(self, pricing_in: float, pricing_out: float):
         # Try to import config and get API key through proper secrets management
         try:
-            from config import config
-            api_key = config.GOOGLE_API_KEY
+            from config import Config
+            config_instance = Config()
+            api_key = config_instance.GOOGLE_API_KEY
         except:
             # Fallback to environment variable
             api_key = os.environ.get("GOOGLE_API_KEY")

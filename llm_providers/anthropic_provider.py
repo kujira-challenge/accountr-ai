@@ -10,8 +10,9 @@ class AnthropicProvider(LLMProvider):
     def __init__(self, pricing_in: float, pricing_out: float):
         # Try to import config and get API key through proper secrets management
         try:
-            from config import config
-            api_key = config.ANTHROPIC_API_KEY
+            from config import Config
+            config_instance = Config()
+            api_key = config_instance.ANTHROPIC_API_KEY
         except:
             # Fallback to environment variable
             api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -29,14 +30,18 @@ class AnthropicProvider(LLMProvider):
                 # Universal data conversion - handle any format
                 try:
                     # Try to convert to string regardless of current type
-                    if hasattr(b, 'decode'):
+                    if isinstance(b, bytes):
                         # It's bytes-like
                         data = b.decode("utf-8")
                         log.debug(f"Image {i}: Converted bytes to string (length={len(data)})")
-                    else:
-                        # It's already string-like or other
-                        data = str(b)
+                    elif isinstance(b, str):
+                        # It's already a string
+                        data = b
                         log.debug(f"Image {i}: Using as string (length={len(data)})")
+                    else:
+                        # Try to convert to string
+                        data = str(b)
+                        log.debug(f"Image {i}: Converted to string (length={len(data)}), type was: {type(b)}")
                     
                     content.append({
                         "type": "image",

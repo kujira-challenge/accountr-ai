@@ -207,10 +207,12 @@ class ProductionPDFExtractor:
         if api_key:
             self.api_key = api_key
         elif self.provider_name == "anthropic":
-            self.api_key = config.ANTHROPIC_API_KEY
+            config_instance = config
+            self.api_key = config_instance.ANTHROPIC_API_KEY
         else:
             try:
-                self.api_key = config.GOOGLE_API_KEY
+                config_instance = config
+                self.api_key = config_instance.GOOGLE_API_KEY
             except AttributeError:
                 # Fallback for missing property
                 self.api_key = os.environ.get("GOOGLE_API_KEY")
@@ -1395,9 +1397,9 @@ def main():
     
     # Use configuration values
     extractor = ProductionPDFExtractor(
-        api_key=config.OPENAI_API_KEY or config.ANTHROPIC_API_KEY,
+        api_key=getattr(config, 'OPENAI_API_KEY', None) or config.ANTHROPIC_API_KEY,
         use_mock=config.USE_MOCK_DATA,
-        api_provider='openai' if config.OPENAI_API_KEY else 'anthropic'
+        api_provider='openai' if getattr(config, 'OPENAI_API_KEY', None) else 'anthropic'
     )
     
     # Process directory
