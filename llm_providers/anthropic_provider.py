@@ -36,6 +36,7 @@ class AnthropicProvider(LLMProvider):
                     # Try to convert to string regardless of current type
                     if isinstance(b, bytes):
                         # It's bytes-like
+                        log.error(f"[BYTES_PATH] Converting bytes to string for image {i}")
                         data = b.decode("utf-8")
                         log.info(f"Image {i}: Converted bytes to string (length={len(data)})")
                     elif isinstance(b, str):
@@ -57,7 +58,7 @@ class AnthropicProvider(LLMProvider):
                     })
                     
                 except Exception as conversion_error:
-                    log.error(f"Image {i}: Failed to convert to string: {conversion_error}, type: {type(b)}")
+                    log.error(f"[CONVERSION_ERROR] Image {i}: Failed to convert to string: {conversion_error}, type: {type(b)}")
                     # Skip this image rather than failing completely
                     continue
             
@@ -93,7 +94,7 @@ class AnthropicProvider(LLMProvider):
             
         except Exception as e:
             import traceback
-            log.error(f"Anthropic API call failed: {e}")
+            log.error(f"[DEBUG_MARKER] Anthropic API call failed: {e}")
             log.error(f"Full traceback: {traceback.format_exc()}")
             # Return fallback response with valid amount for validation
             fallback_text = '[{"伝票日付":"","借貸区分":"借方","科目名":"API失敗","金額":100,"摘要":"Anthropic API呼び出し失敗【手動確認必要】"}]'
