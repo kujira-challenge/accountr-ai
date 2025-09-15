@@ -75,7 +75,7 @@ class AnthropicProvider(LLMProvider):
                 text = resp.content[0].text if resp.content and len(resp.content) > 0 else ""
                 if not text or len(text.strip()) < 10:  # Check for essentially empty response
                     log.warning("Anthropic returned empty or very short response")
-                    text = '[{"伝票日付":"","借貸区分":"借方","科目名":"抽出失敗","金額":1,"摘要":"Anthropicレスポンス抽出失敗【手動確認必要】"}]'
+                    text = '[{"伝票日付":"","借貸区分":"借方","科目名":"抽出失敗","金額":100,"摘要":"Anthropicレスポンス抽出失敗【手動確認必要】"}]'
             except (IndexError, AttributeError) as e:
                 log.warning(f"Failed to extract text from Anthropic response: {e}")
                 text = '[{"伝票日付":"","借貸区分":"借方","科目名":"抽出失敗","金額":1,"摘要":"Anthropicレスポンス抽出失敗【手動確認必要】"}]'
@@ -91,7 +91,7 @@ class AnthropicProvider(LLMProvider):
             log.error(f"Anthropic API call failed: {e}")
             # Return fallback response with valid amount for validation
             return LLMResult(
-                text='[{"伝票日付":"","借貸区分":"借方","科目名":"API失敗","金額":1,"摘要":"Anthropic API呼び出し失敗【手動確認必要】"}]',
+                text='[{"伝票日付":"","借貸区分":"借方","科目名":"API失敗","金額":100,"摘要":"Anthropic API呼び出し失敗【手動確認必要】"}]',
                 tokens_in=0,
                 tokens_out=0,
                 cost_usd=0.0

@@ -19,13 +19,28 @@ class OpenAIProvider(LLMProvider):
             ]
             
             # Add images to user message
-            for b in images:
-                messages[1]["content"].append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{b.decode('utf-8')}"
-                    }
-                })
+            for i, b in enumerate(images):
+                try:
+                    # Handle both bytes and string inputs
+                    if isinstance(b, bytes):
+                        data = b.decode('utf-8')
+                        log.debug(f"Image {i}: Converted bytes to string (length={len(data)})")
+                    elif isinstance(b, str):
+                        data = b
+                        log.debug(f"Image {i}: Using as string (length={len(data)})")
+                    else:
+                        data = str(b)
+                        log.debug(f"Image {i}: Converted to string (length={len(data)}), type was: {type(b)}")
+
+                    messages[1]["content"].append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{data}"
+                        }
+                    })
+                except Exception as conversion_error:
+                    log.error(f"Image {i}: Failed to convert: {conversion_error}, type: {type(b)}")
+                    continue
             
             # For GPT-5, use new parameters if available
             generation_config = {
@@ -54,7 +69,7 @@ class OpenAIProvider(LLMProvider):
                 text = resp.choices[0].message.content if resp.choices and len(resp.choices) > 0 and resp.choices[0].message else ""
             except (IndexError, AttributeError) as e:
                 log.warning(f"Failed to extract text from OpenAI response: {e}")
-                text = '[{"伝票日付":"","借貸区分":"借方","科目名":"OpenAI失敗","金額":1,"摘要":"OpenAIレスポンス抽出失敗【手動確認必要】"}]'
+                text = '[{"伝票日付":"","借貸区分":"借方","科目名":"OpenAI失敗","金額":100,"摘要":"OpenAIレスポンス抽出失敗【手動確認必要】"}]'
             
             return LLMResult(
                 text=text or "",
@@ -67,7 +82,7 @@ class OpenAIProvider(LLMProvider):
             log.error(f"OpenAI API call failed: {e}")
             # Return fallback response for any API errors
             return LLMResult(
-                text='[{"伝票日付":"","借貸区分":"借方","科目名":"OpenAI失敗","金額":1,"摘要":"OpenAI API呼び出し失敗【手動確認必要】"}]',
+                text='[{"伝票日付":"","借貸区分":"借方","科目名":"OpenAI失敗","金額":100,"摘要":"OpenAI API呼び出し失敗【手動確認必要】"}]',
                 tokens_in=0,
                 tokens_out=0,
                 cost_usd=0.0
