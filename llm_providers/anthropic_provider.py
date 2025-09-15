@@ -25,6 +25,10 @@ class AnthropicProvider(LLMProvider):
 
     def generate(self, system: str, user: str, images: List, model: str, temperature: float = 0.0) -> LLMResult:
         try:
+            log.debug(f"Anthropic provider called with {len(images)} images")
+            for i, img in enumerate(images):
+                log.debug(f"Image {i}: type={type(img)}, length={len(str(img)) if img else 0}")
+
             content = [{"type": "text", "text": user}]
             for i, b in enumerate(images):
                 # Universal data conversion - handle any format
@@ -88,10 +92,14 @@ class AnthropicProvider(LLMProvider):
             )
             
         except Exception as e:
+            import traceback
             log.error(f"Anthropic API call failed: {e}")
+            log.error(f"Full traceback: {traceback.format_exc()}")
             # Return fallback response with valid amount for validation
+            fallback_text = '[{"伝票日付":"","借貸区分":"借方","科目名":"API失敗","金額":100,"摘要":"Anthropic API呼び出し失敗【手動確認必要】"}]'
+            log.error(f"Returning fallback response: {fallback_text}")
             return LLMResult(
-                text='[{"伝票日付":"","借貸区分":"借方","科目名":"API失敗","金額":100,"摘要":"Anthropic API呼び出し失敗【手動確認必要】"}]',
+                text=fallback_text,
                 tokens_in=0,
                 tokens_out=0,
                 cost_usd=0.0

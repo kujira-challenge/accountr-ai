@@ -163,8 +163,12 @@ def validate_amounts(entries: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]
     
     for e in entries:
         try:
-            amount = int(e.get("金額", 0) or 0)
-        except (ValueError, TypeError):
+            raw_amount = e.get("金額", 0)
+            logger.debug(f"Raw amount from entry: {repr(raw_amount)}, type: {type(raw_amount)}")
+            amount = int(raw_amount or 0)
+            logger.debug(f"Converted amount: {amount}")
+        except (ValueError, TypeError) as conv_error:
+            logger.warning(f"Amount conversion failed for {repr(raw_amount)}: {conv_error}")
             amount = 0
         
         if amount <= 0:
