@@ -25,9 +25,9 @@ class AnthropicProvider(LLMProvider):
 
     def generate(self, system: str, user: str, images: List, model: str, temperature: float = 0.0) -> LLMResult:
         try:
-            log.debug(f"Anthropic provider called with {len(images)} images")
+            log.info(f"Anthropic provider called with {len(images)} images")
             for i, img in enumerate(images):
-                log.debug(f"Image {i}: type={type(img)}, length={len(str(img)) if img else 0}")
+                log.info(f"Image {i}: type={type(img)}, length={len(str(img)) if img else 0}")
 
             content = [{"type": "text", "text": user}]
             for i, b in enumerate(images):
@@ -37,15 +37,15 @@ class AnthropicProvider(LLMProvider):
                     if isinstance(b, bytes):
                         # It's bytes-like
                         data = b.decode("utf-8")
-                        log.debug(f"Image {i}: Converted bytes to string (length={len(data)})")
+                        log.info(f"Image {i}: Converted bytes to string (length={len(data)})")
                     elif isinstance(b, str):
                         # It's already a string
                         data = b
-                        log.debug(f"Image {i}: Using as string (length={len(data)})")
+                        log.info(f"Image {i}: Using as string (length={len(data)})")
                     else:
                         # Try to convert to string
                         data = str(b)
-                        log.debug(f"Image {i}: Converted to string (length={len(data)}), type was: {type(b)}")
+                        log.info(f"Image {i}: Converted to string (length={len(data)}), type was: {type(b)}")
                     
                     content.append({
                         "type": "image",
