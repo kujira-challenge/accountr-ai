@@ -1,10 +1,45 @@
 import os
+import base64
 import logging
 from typing import List
+from io import BytesIO
 from anthropic import Anthropic
+from PIL import Image
 from .base import LLMProvider, LLMResult
 
 log = logging.getLogger(__name__)
+
+# FORCE LOG OUTPUT TO CONFIRM CODE DEPLOYMENT
+print("🔥 ANTHROPIC_PROVIDER.PY LOADED - NEW VERSION WITH DEBUG MARKERS 🔥")
+log.error("🔥 ANTHROPIC_PROVIDER.PY LOADED - NEW VERSION WITH DEBUG MARKERS 🔥")
+
+def _sniff_mime_from_b64(b64str: str) -> str:
+    """Base64文字列から画像形式を自動判定してMIMEタイプを返す"""
+    try:
+        raw = base64.b64decode(b64str)
+        with Image.open(BytesIO(raw)) as im:
+            fmt = (im.format or "").lower()  # 'png', 'jpeg', 'webp', 'gif', ...
+        if fmt == "jpg":
+            fmt = "jpeg"
+        if fmt not in {"png","jpeg","webp","gif"}:
+            # 不明は jpeg にフォールバック
+            fmt = "jpeg"
+        return f"image/{fmt}"
+    except Exception as e:
+        log.warning(f"Failed to detect image format from base64: {e}, using jpeg fallback")
+        return "image/jpeg"
+
+def _image_part_from_b64(b64str: str) -> dict:
+    """Base64文字列から自動MIME判定でAnthropicの画像パートを作成"""
+    media_type = _sniff_mime_from_b64(b64str)
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": media_type,
+            "data": b64str,
+        },
+    }
 
 class AnthropicProvider(LLMProvider):
     def __init__(self, pricing_in: float, pricing_out: float):
@@ -29,7 +64,7 @@ class AnthropicProvider(LLMProvider):
             for i, img in enumerate(images):
                 log.info(f"Image {i}: type={type(img)}, length={len(str(img)) if img else 0}")
 
-            content = [{"type": "text", "text": user}]
+            content = []
             for i, b in enumerate(images):
                 # Universal data conversion - handle any format
                 try:
@@ -47,20 +82,15 @@ class AnthropicProvider(LLMProvider):
                         # Try to convert to string
                         data = str(b)
                         log.info(f"Image {i}: Converted to string (length={len(data)}), type was: {type(b)}")
-                    
-                    content.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": data
-                        }
-                    })
-                    
+
+                    content.append(_image_part_from_b64(data))
+
                 except Exception as conversion_error:
                     log.error(f"[CONVERSION_ERROR] Image {i}: Failed to convert to string: {conversion_error}, type: {type(b)}")
                     # Skip this image rather than failing completely
                     continue
+
+            content.append({"type": "text", "text": user})
             
             resp = self.client.messages.create(
                 model=model,

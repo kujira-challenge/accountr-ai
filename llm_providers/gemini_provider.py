@@ -4,6 +4,7 @@ import logging
 from typing import List
 import google.generativeai as genai
 from google.generativeai import types as gtypes
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from .base import LLMProvider, LLMResult
 
 log = logging.getLogger(__name__)
@@ -12,6 +13,13 @@ JSON_SYSTEM_GUARD = (
     "You are extracting structured ledger rows from USER-SUPPLIED images. "
     "Do NOT quote long texts. Return ONLY JSON (array of objects) with the specified schema."
 )
+
+SAFETY_SETTINGS = [
+    {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
+    {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+    {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+    {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+]
 
 def _to_blob(b64jpeg):
     """Convert base64 JPEG (string or bytes) to Gemini blob format"""
@@ -68,13 +76,6 @@ class GeminiProvider(LLMProvider):
         }
         
         # Advanced safety settings - maximally permissive for business document extraction
-        safety = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
-        ]
         
         if json_mode:
             gen_cfg["response_mime_type"] = "application/json"
@@ -102,7 +103,7 @@ class GeminiProvider(LLMProvider):
             except Exception as schema_error:
                 log.warning(f"Gemini JSON schema setup failed: {schema_error} - using MIME type only")
 
-        mdl = genai.GenerativeModel(model_name=model, safety_settings=safety)
+        mdl = genai.GenerativeModel(model_name=model, safety_settings=SAFETY_SETTINGS)
         
         # Add request timeout and retry logic
         import time

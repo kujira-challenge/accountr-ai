@@ -433,7 +433,61 @@ class MJSConverter:
         
         # 簡易グルーピングとバランス検査
         self._check_balance(data)
-    
+
+def save_or_mark_unconfirmed(output_csv_path: str, rows: list, source_basename: str):
+    """CSVを保存するか、0行の場合は未確定CSVを別出力"""
+    from pathlib import Path
+    import csv
+
+    if rows:
+        # 正常な保存処理
+        _save_csv(output_csv_path, rows)
+        logger.info(f"Successfully saved {len(rows)} rows to {output_csv_path}")
+    else:
+        # 未確定ファイルを別出力
+        unconfirmed_dir = Path("output/uncertain")
+        unconfirmed_dir.mkdir(parents=True, exist_ok=True)
+        unconfirmed_csv = unconfirmed_dir / f"{source_basename}_unconfirmed.csv"
+
+        # 最低限のメッセージ付きCSVを出力
+        fallback_row = {"メッセージ": "抽出失敗 or コード割当不可。Alias/マスタ/抽出設定を確認してください。"}
+        _save_csv(unconfirmed_csv, [fallback_row])
+        logger.warning(f"Zero rows for {output_csv_path}. Wrote placeholder to {unconfirmed_csv}")
+
+def _save_csv(csv_path: str, rows: list):
+    """CSVファイルを保存するヘルパー関数"""
+    from pathlib import Path
+    import csv
+
+    # 出力ディレクトリの作成
+    Path(csv_path).parent.mkdir(parents=True, exist_ok=True)
+
+    if not rows:
+        return
+
+    # ヘッダーの決定
+    if isinstance(rows[0], dict):
+        # MJS 45列CSVの場合とそれ以外を判別
+        first_row_keys = set(rows[0].keys())
+        mjs_columns_set = set(MJSConverter.MJS_45_COLUMNS)
+
+        if mjs_columns_set.issubset(first_row_keys) or "（借）科目ｺｰﾄﾞ" in first_row_keys:
+            # MJS 45列CSVの場合
+            fieldnames = MJSConverter.MJS_45_COLUMNS
+        else:
+            # 通常のCSV（メッセージ等）
+            fieldnames = rows[0].keys()
+
+        with open(csv_path, 'w', newline='', encoding='utf-8-sig') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL)
+            writer.writeheader()
+            writer.writerows(rows)
+    else:
+        # リストの場合はそのまま書き込み
+        with open(csv_path, 'w', newline='', encoding='utf-8-sig') as csvfile:
+            writer = csv.writer(csvfile, quoting=csv.QUOTE_MINIMAL)
+            writer.writerows(rows)
+
     def _check_balance(self, data: List[Dict[str, Any]]) -> None:
         """簡易グルーピングで借方合計=貸方合計を確認"""
         # 同日付かつ摘要の共通部分が一致するものをグループ化
@@ -576,22 +630,14 @@ def fivejson_to_mjs45(
             if rows_dropped > 0:
                 logger.info(f"Dedup/BothEmpty: dropped={rows_dropped} rows with both debit and credit codes empty")
         
-        # 6. CSVファイルの保存
+        # 6. CSVファイルの保存（0行時は未確定CSV出力）
         logger.info(f"Saving CSV to: {out_csv_path}")
-        
-        # 出力ディレクトリの作成
-        Path(out_csv_path).parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(out_csv_path, 'w', newline='', encoding='utf-8-sig') as csvfile:
-            writer = csv.DictWriter(
-                csvfile, 
-                fieldnames=MJSConverter.MJS_45_COLUMNS,
-                quoting=csv.QUOTE_MINIMAL
-            )
-            writer.writeheader()
-            writer.writerows(mjs_data)
-        
-        logger.info(f"Successfully saved {len(mjs_data)} rows to {out_csv_path}")
+
+        # 入力ファイル名から拡張子を除いたベース名を取得
+        source_basename = Path(ai_json_path).stem
+
+        # 0行の場合は未確定CSV、通常の場合は正常保存
+        save_or_mark_unconfirmed(out_csv_path, mjs_data, source_basename)
         
     except Exception as e:
         logger.error(f"Conversion failed: {e}", exc_info=True)
