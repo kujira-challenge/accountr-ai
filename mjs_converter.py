@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from difflib import SequenceMatcher
+from collections import defaultdict
 import pandas as pd
 
 # ログ設定
@@ -34,7 +35,16 @@ def common_memo(m: str) -> str:
 
 class MJSConverter:
     """ミロク取込45列CSV変換器クラス"""
-    
+
+    # 内蔵名寄せ辞書（外部Aliasが無くても動く最低限）
+    NORMALIZE_MAP = {
+        "預り金": ["預 り 金", "預金（預り）", "預かり金", "預ﾘ金"],
+        "敷金": ["保証金", "ｼｷｷﾝ", "（敷金）", "敷 金"],
+        "修繕費": ["修理費", "修繕", "ﾘﾍﾟｱ費", "修繕料"],
+        "売上高": ["売上", "家賃", "賃料", "駐車料", "1月分賃料", "２月分賃料"],
+        "普通預金": ["普通", "普通 口座", "普 口"],
+    }
+
     # ミロク取込45列ヘッダー（完全一致）
     MJS_45_COLUMNS = [
         "伝票日付", "内部月", "伝票NO", "証憑NO", "データ種別", "仕訳入力形式",
@@ -194,6 +204,20 @@ class MJSConverter:
         s = unicodedata.normalize("NFKC", text or "").strip()
         s = re.sub(r"\s+", "", s)
         return s
+
+    def _normalize_account_name(self, s: str) -> str:
+        """内蔵辞書による科目名正規化"""
+        ss = (s or "").replace("　", " ").strip()  # 全角空白→半角
+        # 括弧や部屋番号・物件名を落とす軽い正規化
+        base = ss.split("（")[0].split("(")[0].strip()
+
+        for canonical, alts in self.NORMALIZE_MAP.items():
+            if base == canonical:
+                return canonical
+            for alt in alts:
+                if alt in base:
+                    return canonical
+        return base  # 何も当たらなければ原文
     
     def normalize_alias_name(self, name: str) -> str:
         """銀行ニックネームの正規化（表記ゆれ対応）"""
@@ -384,7 +408,8 @@ class MJSConverter:
         
         # 科目名の決定と正規化
         account_name = self._decide_account_name(entry)  # A: 摘要からサイド別に拾う
-        account_name = self.normalize_alias(account_name)  # B: エイリアスで名寄せ
+        account_name = self._normalize_account_name(account_name)  # B: 内蔵辞書で名寄せ
+        account_name = self.normalize_alias(account_name)  # C: エイリアスで名寄せ
         account_code, aux_code = self.lookup_account_code(account_name)
         
         # 未割当の場合は摘要に【科目コード要確認】を追記
@@ -409,30 +434,50 @@ class MJSConverter:
         return row
     
     def validate_and_warn(self, data: List[Dict[str, Any]]) -> None:
-        """軽量バリデーションと警告ログ"""
-        logger.info(f"Validating {len(data)} entries...")
-        
-        # 基本バリデーション
-        for i, row in enumerate(data):
-            # 借方系と貸方系のどちらか一方のみコード欄が埋まっているか
-            has_debit = bool(row.get("（借）科目ｺｰﾄﾞ", ""))
-            has_credit = bool(row.get("（貸）科目ｺｰﾄﾞ", ""))
-            
-            if has_debit and has_credit:
-                logger.warning(f"Row {i}: Both debit and credit codes are set")
-            elif not has_debit and not has_credit:
-                logger.warning(f"Row {i}: Neither debit nor credit codes are set")
-            
-            # 金額が正の数か
+        """軽量バリデーションと警告ログ（例外を絶対に外に漏らさない）"""
+        try:
+            logger.info(f"Validating {len(data)} entries...")
+
+            # 基本バリデーション
+            for i, row in enumerate(data):
+                try:
+                    # 借方系と貸方系のどちらか一方のみコード欄が埋まっているか
+                    has_debit = bool(row.get("（借）科目ｺｰﾄﾞ", ""))
+                    has_credit = bool(row.get("（貸）科目ｺｰﾄﾞ", ""))
+
+                    if has_debit and has_credit:
+                        logger.warning(f"Row {i}: Both debit and credit codes are set")
+                    elif not has_debit and not has_credit:
+                        logger.warning(f"Row {i}: Neither debit nor credit codes are set")
+
+                    # 金額が正の数か
+                    try:
+                        amount = float(row.get("金額", "0"))
+                        if amount < 0:
+                            logger.warning(f"Row {i}: Negative amount: {amount}")
+                    except (ValueError, TypeError):
+                        logger.warning(f"Row {i}: Invalid amount format: {row.get('金額')}")
+
+                except Exception as e:
+                    logger.debug(f"Row {i} validation error (ignored): {e}")
+                    continue
+
+            # バランス検査（例外安全）
             try:
-                amount = float(row.get("金額", "0"))
-                if amount < 0:
-                    logger.warning(f"Row {i}: Negative amount: {amount}")
-            except (ValueError, TypeError):
-                logger.warning(f"Row {i}: Invalid amount format: {row.get('金額')}")
-        
-        # 簡易グルーピングとバランス検査
-        self._check_balance(data)
+                imbalances = self._check_balance(data)
+                if imbalances:
+                    # 最大20件までログ出力
+                    for key, diff in list(imbalances.items())[:20]:
+                        logger.warning(f"Group imbalance: key={key} diff={diff}")
+                    logger.warning(f"Found {len(imbalances)} unbalanced groups (will auto-fix later if rules enabled).")
+                else:
+                    logger.info("All groups are balanced")
+            except Exception as e:
+                # 二度と落とさない
+                logger.error(f"_check_balance failed (ignored): {e}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"validate_and_warn completely failed (ignored): {e}", exc_info=True)
 
 def save_or_mark_unconfirmed(output_csv_path: str, rows: list, source_basename: str):
     """CSVを保存するか、0行の場合は未確定CSVを別出力"""
@@ -488,46 +533,50 @@ def _save_csv(csv_path: str, rows: list):
             writer = csv.writer(csvfile, quoting=csv.QUOTE_MINIMAL)
             writer.writerows(rows)
 
-    def _check_balance(self, data: List[Dict[str, Any]]) -> None:
-        """簡易グルーピングで借方合計=貸方合計を確認"""
-        # 同日付かつ摘要の共通部分が一致するものをグループ化
-        groups = {}
-        
-        for row in data:
-            date = row.get("伝票日付", "")
-            memo = row.get("摘要", "")
-            common_part = common_memo(memo)
-            
-            key = (date, common_part)
-            if key not in groups:
-                groups[key] = {"debit_total": 0, "credit_total": 0}
-            
-            amount_str = row.get("金額", "0")
-            try:
-                amount = float(amount_str)
-            except (ValueError, TypeError):
-                continue
-            
-            if row.get("（借）科目ｺｰﾄﾞ"):
-                groups[key]["debit_total"] += amount
-            elif row.get("（貸）科目ｺｰﾄﾞ"):
-                groups[key]["credit_total"] += amount
-        
-        # バランスチェック
-        unbalanced_count = 0
-        for (date, memo), totals in groups.items():
-            debit = totals["debit_total"]
-            credit = totals["credit_total"]
-            
-            if abs(debit - credit) > 0.01:  # 1円未満の誤差は許容
-                unbalanced_count += 1
-                logger.warning(f"Balance mismatch: {date} '{memo[:50]}...' - "
-                             f"Debit: {debit}, Credit: {credit}, Diff: {debit - credit}")
-        
-        if unbalanced_count == 0:
-            logger.info("All groups are balanced")
-        else:
-            logger.warning(f"{unbalanced_count} unbalanced groups found")
+    def _check_balance(self, data: List[Dict[str, Any]]) -> Dict:
+        """
+        仕訳グルーピング単位で借貸合計が一致しているか確認。
+        例外は投げず、差額を返して呼び出し元でWARNINGログに留める。
+        """
+        try:
+            # グループキーの定義
+            def group_key(row):
+                return (row.get("伝票日付", ""), common_memo(row.get("摘要", "")))
+
+            sums = defaultdict(lambda: {"debit": 0, "credit": 0, "rows": 0})
+
+            for row in data:
+                try:
+                    key = group_key(row)
+                    amount = float(row.get("金額", 0) or 0)
+                    side = str(row.get("借貸区分", "")).strip()
+
+                    if side == "借方" and row.get("（借）科目ｺｰﾄﾞ"):
+                        sums[key]["debit"] += amount
+                    elif side == "貸方" and row.get("（貸）科目ｺｰﾄﾞ"):
+                        sums[key]["credit"] += amount
+
+                    sums[key]["rows"] += 1
+
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.debug(f"Row processing error in balance check: {e}")
+                    continue
+
+            # 不均衡の検出
+            imbalances = {}
+            for key, values in sums.items():
+                try:
+                    diff = round(values["debit"] - values["credit"], 2)
+                    if abs(diff) > 0.01:  # 1円未満の誤差は許容
+                        imbalances[key] = diff
+                except (TypeError, ValueError):
+                    continue
+
+            return imbalances
+
+        except Exception as e:
+            logger.error(f"_check_balance completely failed: {e}", exc_info=True)
+            return {}  # 安全なフォールバック
 
 
 def fivejson_to_mjs45(
@@ -616,8 +665,11 @@ def fivejson_to_mjs45(
         
         logger.info(f"Generated {len(mjs_data)} MJS rows")
         
-        # 5. バリデーション
-        converter.validate_and_warn(mjs_data)
+        # 5. バリデーション（例外でCSV保存を阻害しない）
+        try:
+            converter.validate_and_warn(mjs_data)
+        except Exception as e:
+            logger.error(f"validate_and_warn failed (ignored): {e}", exc_info=True)
         
         # 5.5 両コード空の行を除去（POSTPROCESS設定に応じて）
         from config import config

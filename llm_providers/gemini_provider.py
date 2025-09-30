@@ -69,9 +69,11 @@ class GeminiProvider(LLMProvider):
         for b in images_b64:
             parts.append(_to_blob(b))
 
-        # Generation configuration
+        # Generation configuration（空返し対策強化）
         gen_cfg = {
-            "temperature": 0.0, 
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "top_k": 40,
             "max_output_tokens": max_out
         }
         
@@ -105,15 +107,22 @@ class GeminiProvider(LLMProvider):
 
         mdl = genai.GenerativeModel(model_name=model, safety_settings=SAFETY_SETTINGS)
         
-        # Add request timeout and retry logic
+        # Add request timeout and retry logic（空返し対策強化）
         import time
         max_retries = 2
-        base_timeout = 30  # seconds
-        
+        base_timeout = 25  # seconds（短縮）
+
         for attempt in range(max_retries):
             try:
                 # Set reasonable timeout for API call
-                resp = mdl.generate_content(parts, generation_config=gen_cfg, request_options={"timeout": base_timeout * (attempt + 1)})
+                resp = mdl.generate_content(parts, generation_config=gen_cfg, request_options={"timeout": base_timeout})
+
+                # 空返しチェック（finish_reason=2等）
+                text_content = _first_text(resp)
+                if not text_content or not text_content.strip():
+                    finish_reason = getattr(getattr(resp, "candidates", [{}])[0], "finish_reason", "unknown")
+                    raise RuntimeError(f"Gemini returned empty text (finish_reason={finish_reason})")
+
                 break  # Success, exit retry loop
             except Exception as call_error:
                 if attempt == max_retries - 1:
@@ -138,36 +147,22 @@ class GeminiProvider(LLMProvider):
         total_tin, total_tout = 0, 0
         
         try:
-            # Step 1: Normal mode attempt
+            # Step 1: Normal mode attempt（早期フォールバック）
             log.info(f"Gemini Step 1: Normal mode with {model}")
-            resp, tin, tout = self._call(model, system, user, images, json_mode=False, max_out=2048)
+            resp, tin, tout = self._call(model, system, user, images, json_mode=False, max_out=4096)
             text = _first_text(resp)
             total_tin, total_tout = tin, tout
 
-            # Step 2: If empty parts, try JSON mode with increased tokens
-            if not text:
+            # 空返しは即座にエラー扱い（粘らない）
+            if not text or not text.strip():
                 finish_reason = getattr(getattr(resp, "candidates", [{}])[0], "finish_reason", "unknown")
-                log.warning(f"Gemini empty parts: finish_reason={finish_reason}, retrying with JSON mode")
-                
-                try:
-                    resp, tin2, tout2 = self._call(model, system, user, images, json_mode=True, max_out=4096)
-                    text = _first_text(resp)
-                    total_tin, total_tout = total_tin + tin2, total_tout + tout2
-                    log.info(f"Gemini JSON mode retry completed: text_length={len(text or '')}")
-                except Exception as json_retry_error:
-                    log.error(f"Gemini JSON mode retry failed: {json_retry_error}")
-                    # Don't re-raise here, continue to Step 3 check
-
-            # Step 3: If still empty, raise explicit exception for upstream fallback
-            if not text:
-                final_reason = getattr(getattr(resp, "candidates", [{}])[0], "finish_reason", "unknown")
-                log.error(f"Gemini completely failed after all retries: finish_reason={final_reason}")
-                raise RuntimeError(f"Gemini returned no content parts after retries (finish_reason={final_reason})")
+                log.warning(f"Gemini Step 1 empty response: finish_reason={finish_reason}, failing fast for upstream fallback")
+                raise RuntimeError(f"Gemini returned empty content (finish_reason={finish_reason})")
 
             # Success - calculate cost and return
             cost = total_tin * self.pr_in + total_tout * self.pr_out
             log.info(f"Gemini success: {len(text)} chars, tokens_in={total_tin}, tokens_out={total_tout}, cost=${cost:.4f}")
-            
+
             return LLMResult(
                 text=text,
                 tokens_in=total_tin,
