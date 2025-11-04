@@ -10,6 +10,7 @@ import logging
 from collections import defaultdict
 from typing import List, Dict, Any, Tuple
 from utils.reconcile_dedupe import reconcile_and_dedupe
+from utils.voucher_numbering import assign_voucher_numbers
 
 logger = logging.getLogger(__name__)
 
@@ -186,30 +187,37 @@ def validate_amounts(entries: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]
 def postprocess_extracted_data(entries: List[Dict[str, Any]], config=None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     抽出データの総合後処理
-    
+
     1. 貸借ペア保証
     2. 金額バリデーション
     3. 重複除去と残高調整（合算行除去・one-vs-many分割）
-    
+    4. 仕訳No付番
+
     Args:
         entries: LLM抽出後の生データ
         config: 設定オブジェクト（将来の設定拡張用）
-        
+
     Returns:
         Tuple[processed_entries, error_entries]: (処理済みデータ, エラーデータ)
     """
     logger.info("Starting comprehensive post-processing")
-    
+
     # 1. 貸借ペア保証
     paired_entries = enforce_debit_credit_pairs(entries)
-    
+
     # 2. 金額バリデーション
     valid_entries, error_entries = validate_amounts(paired_entries)
-    
+
     # 3. 重複除去と残高調整（合算行・分割処理）
     if valid_entries:
         valid_entries = reconcile_and_dedupe(valid_entries)
-    
+
+    # 4. 仕訳No付番（config設定を優先、未設定時はデフォルト値を使用）
+    if valid_entries:
+        prefer_llm = getattr(config, 'USE_LLM_VOUCHER_NO', True) if config else True
+        width = getattr(config, 'VOUCHER_NO_WIDTH', 3) if config else 3
+        valid_entries = assign_voucher_numbers(valid_entries, prefer_llm=prefer_llm, width=width)
+
     logger.info(f"Post-processing completed: {len(valid_entries)} valid entries, {len(error_entries)} errors")
-    
+
     return valid_entries, error_entries

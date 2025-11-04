@@ -399,12 +399,16 @@ class MJSConverter:
         """5カラムJSONエントリから45列の行を作成"""
         # 45列の空行を作成
         row = {col: "" for col in self.MJS_45_COLUMNS}
-        
+
         # 基本情報の設定
         row["伝票日付"] = self.normalize_date(entry.get("伝票日付", ""))
         row["金額"] = str(self.normalize_amount(entry.get("金額", 0)))
         row["消費税額"] = "0"  # 固定値
         row["摘要"] = str(entry.get("摘要", ""))
+
+        # 仕訳No → 伝票NO のマッピング（任意フィールド）
+        if "仕訳No" in entry and entry.get("仕訳No"):
+            row["伝票NO"] = str(entry.get("仕訳No"))
         
         # 科目名の決定と正規化
         account_name = self._decide_account_name(entry)  # A: 摘要からサイド別に拾う

@@ -50,6 +50,9 @@ processing:
   zero_count_exception: true
   # Diagnostic snapshots
   diag_snapshots: true
+  # Voucher numbering settings
+  use_llm_voucher_no: true    # Use voucher numbers from LLM if available
+  voucher_no_width: 3         # Zero-padding width for voucher numbers
 
 # Logging
 logging:

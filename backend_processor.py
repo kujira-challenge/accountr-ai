@@ -229,6 +229,27 @@ def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, An
                                 df[col] = ""
                         # 列順序を45列形式に合わせる
                         df = df.reindex(columns=MJSConverter.MJS_45_COLUMNS, fill_value="")
+
+                        # 仕訳No（伝票NO）順にソート
+                        if "伝票NO" in df.columns and not df.empty:
+                            logger.info("Sorting by 伝票NO (voucher number)")
+                            # ソートキーの作成：伝票NO → 借方・貸方の順（借方優先）
+                            # 借方・貸方の判定：（借）科目コードがある = 借方, （貸）科目コードがある = 貸方
+                            df['_sort_debit_credit'] = df.apply(
+                                lambda row: 0 if row.get('（借）科目ｺｰﾄﾞ', '') != '' else 1,
+                                axis=1
+                            )
+                            # 伝票NOを数値としてソート（空文字は最後）
+                            df['_sort_voucher_no'] = pd.to_numeric(df['伝票NO'], errors='coerce').fillna(float('inf'))
+
+                            df = df.sort_values(
+                                by=['_sort_voucher_no', '_sort_debit_credit'],
+                                ascending=[True, True]
+                            )
+
+                            # ソート用の一時列を削除
+                            df = df.drop(columns=['_sort_debit_credit', '_sort_voucher_no'])
+                            logger.info(f"Sorted {len(df)} rows by voucher number")
                         
                         dropped_count = original_count - len(finalized_rows)
                         if dropped_count > 0:

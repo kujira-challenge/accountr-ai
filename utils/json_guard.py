@@ -28,12 +28,12 @@ def _list5_to_dict5(item):
 def _validate_and_normalize(entries: List[Dict]) -> List[Dict]:
     """エントリのバリデーションと正規化"""
     validated_data = []
-    
+
     for i, entry in enumerate(entries):
         if not isinstance(entry, dict):
             logger.warning(f"エントリ{i}が辞書型ではありません: {type(entry)}")
             continue
-        
+
         # 必須カラムの存在チェック
         missing_cols = [col for col in REQUIRED_5_COLUMNS if col not in entry]
         if missing_cols:
@@ -41,7 +41,7 @@ def _validate_and_normalize(entries: List[Dict]) -> List[Dict]:
             # 不足カラムを補完
             for col in missing_cols:
                 entry[col] = "" if col != "金額" else 0
-        
+
         # 金額の型チェック
         try:
             amount = entry.get("金額", 0)
@@ -51,9 +51,24 @@ def _validate_and_normalize(entries: List[Dict]) -> List[Dict]:
         except (ValueError, TypeError):
             logger.warning(f"エントリ{i}の金額が無効: {entry.get('金額')}")
             entry["金額"] = 0
-        
+
+        # 仕訳Noの検証（任意フィールド）
+        if "仕訳No" in entry:
+            voucher_no = entry.get("仕訳No")
+            if voucher_no is not None:
+                # 文字列に変換
+                voucher_no_str = str(voucher_no)
+                # 妥当性チェック（1～6桁の数字）
+                if re.match(r'^\d{1,6}$', voucher_no_str):
+                    entry["仕訳No"] = voucher_no_str
+                    logger.debug(f"エントリ{i}の仕訳No: {voucher_no_str}")
+                else:
+                    logger.warning(f"エントリ{i}の仕訳Noが無効（削除）: {voucher_no}")
+                    # 無効な仕訳Noは削除せずNoneにする
+                    entry["仕訳No"] = None
+
         validated_data.append(entry)
-    
+
     return validated_data
 
 def _get_fallback_entry() -> List[Dict]:

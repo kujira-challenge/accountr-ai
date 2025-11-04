@@ -138,6 +138,10 @@ class Config:
     # Right column zoom for credit side improvement
     RIGHT_COL_ZOOM = _yaml_config.get('pdf', {}).get('right_col_zoom', False)
     RIGHT_COL_DPI = int(_yaml_config.get('pdf', {}).get('dpi', PDF_DPI))  # Use same DPI or config override
+
+    # Voucher numbering settings
+    USE_LLM_VOUCHER_NO = _yaml_config.get('processing', {}).get('use_llm_voucher_no', True)
+    VOUCHER_NO_WIDTH = int(_yaml_config.get('processing', {}).get('voucher_no_width', 3))
     
     # API Rate Limiting
     API_REQUEST_INTERVAL = float(os.getenv('API_REQUEST_INTERVAL', '2'))
