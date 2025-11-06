@@ -63,7 +63,7 @@ class GeminiProvider(LLMProvider):
         genai.configure(api_key=api_key)
         self.pr_in, self.pr_out = pricing_in, pricing_out
 
-    def _call(self, model: str, system: str, user: str, images_b64: List[bytes], *, json_mode: bool = False, max_out: int = 2048):
+    def _call(self, model: str, system: str, user: str, images_b64: List[bytes], *, json_mode: bool = False, max_out: int = 8192):
         """Internal call method with configurable JSON mode and token limits"""
         parts = [JSON_SYSTEM_GUARD + "\n\n" + system + "\n\n" + user]
         for b in images_b64:
@@ -149,7 +149,7 @@ class GeminiProvider(LLMProvider):
         try:
             # Step 1: Normal mode attempt（早期フォールバック）
             log.info(f"Gemini Step 1: Normal mode with {model}")
-            resp, tin, tout = self._call(model, system, user, images, json_mode=False, max_out=4096)
+            resp, tin, tout = self._call(model, system, user, images, json_mode=False, max_out=8192)
             text = _first_text(resp)
             total_tin, total_tout = tin, tout
 
