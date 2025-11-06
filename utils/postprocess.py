@@ -212,10 +212,10 @@ def postprocess_extracted_data(entries: List[Dict[str, Any]], config=None) -> Tu
     if valid_entries:
         valid_entries = reconcile_and_dedupe(valid_entries)
 
-    # 4. 仕訳No付番（config設定を優先、未設定時はデフォルト値を使用）
+    # 4. 仕訳No付番（config設定を優先、未設定時は新ロジックをデフォルト使用）
     if valid_entries:
-        prefer_llm = getattr(config, 'USE_LLM_VOUCHER_NO', True) if config else True
-        width = getattr(config, 'VOUCHER_NO_WIDTH', 3) if config else 3
+        prefer_llm = getattr(config, 'USE_LLM_VOUCHER_NO', False) if config else False  # 貸借一致ブロック方式
+        width = getattr(config, 'VOUCHER_NO_WIDTH', 4) if config else 4  # 4桁0001-9999形式
         valid_entries = assign_voucher_numbers(valid_entries, prefer_llm=prefer_llm, width=width)
 
     logger.info(f"Post-processing completed: {len(valid_entries)} valid entries, {len(error_entries)} errors")

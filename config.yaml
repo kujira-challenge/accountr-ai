@@ -51,8 +51,8 @@ processing:
   # Diagnostic snapshots
   diag_snapshots: true
   # Voucher numbering settings
-  use_llm_voucher_no: true    # Use voucher numbers from LLM if available
-  voucher_no_width: 3         # Zero-padding width for voucher numbers
+  use_llm_voucher_no: false   # Use balance-based block numbering (貸借一致ブロック方式)
+  voucher_no_width: 4         # Zero-padding width for voucher numbers (0001-9999)
 
 # Logging
 logging:

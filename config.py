@@ -140,8 +140,8 @@ class Config:
     RIGHT_COL_DPI = int(_yaml_config.get('pdf', {}).get('dpi', PDF_DPI))  # Use same DPI or config override
 
     # Voucher numbering settings
-    USE_LLM_VOUCHER_NO = _yaml_config.get('processing', {}).get('use_llm_voucher_no', True)
-    VOUCHER_NO_WIDTH = int(_yaml_config.get('processing', {}).get('voucher_no_width', 3))
+    USE_LLM_VOUCHER_NO = _yaml_config.get('processing', {}).get('use_llm_voucher_no', False)  # 貸借一致ブロック方式を優先
+    VOUCHER_NO_WIDTH = int(_yaml_config.get('processing', {}).get('voucher_no_width', 4))  # 4桁0001-9999形式
     
     # API Rate Limiting
     API_REQUEST_INTERVAL = float(os.getenv('API_REQUEST_INTERVAL', '2'))
