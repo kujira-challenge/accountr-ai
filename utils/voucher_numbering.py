@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 # ヘッダ行判定用キーワード（正規表現）
 HEADER_KEYWORDS = re.compile(
-    r"(更新|退去|新規|振替|契約(者|番号)|物件(名|番号)|号室|駐車場|敷金|預り金|"
+    r"(更新.{0,2}伝票|退去|契約.?者|物件.?名|号.?室|オーナー|預.?り.?金|敷.?金|解約|"
+    r"新規|振替|駐車場|"
     r"伝票(番号|No\.?)|請求(書)?番号|受付番号|入金|出金|振込|送金)"
 )
 
@@ -196,6 +197,14 @@ def assign_voucher_numbers(
         if is_header_line(row) and current_block:
             flush_block("HEADER_BOUNDARY")
 
+        # (オプション) 同一摘要連続性チェック: 最初の行と摘要カテゴリが大きく異なる場合はクローズ
+        # 注: 厳しすぎる場合はこの条件を無効化できます
+        # if current_block and len(current_block) > 0:
+        #     first_memo = current_block[0].get("摘要", "")[:20]
+        #     current_memo = row.get("摘要", "")[:20]
+        #     if first_memo != current_memo and len(current_block) >= 2:
+        #         flush_block("MEMO_CHANGE")
+
         # 現在のブロックに行を追加
         current_block.append(row)
 
@@ -213,10 +222,12 @@ def assign_voucher_numbers(
             sum_credit += amount
 
         # 貸借一致判定 → ブロックをクローズ
+        # 条件: 貸借一致 AND 同一日付
         if (
             sum_debit > 0
             and sum_credit > 0
             and abs(sum_debit - sum_credit) <= BALANCE_TOLERANCE
+            and len({r.get("伝票日付", "") for r in current_block}) == 1
         ):
             flush_block("BALANCE_CLOSE")
 
