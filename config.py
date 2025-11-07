@@ -133,7 +133,7 @@ class Config:
     # PDF Processing
     PAGES_PER_SPLIT = int(os.getenv('PAGES_PER_SPLIT', '3'))  # 3ページ単位投入（大量データ対応、タイムアウト防止）
     MAX_FILE_SIZE_MB = int(os.getenv('MAX_FILE_SIZE_MB', '50'))
-    PDF_DPI = int(os.getenv('PDF_DPI', '200'))  # 150-200DPI推奨、過度な圧縮回避
+    PDF_DPI = int(os.getenv('PDF_DPI', '150'))  # 150DPI（画像サイズ削減でGeminiタイムアウト対策）
     
     # Right column zoom for credit side improvement
     RIGHT_COL_ZOOM = _yaml_config.get('pdf', {}).get('right_col_zoom', False)
@@ -146,7 +146,7 @@ class Config:
     # API Rate Limiting
     API_REQUEST_INTERVAL = float(os.getenv('API_REQUEST_INTERVAL', '2'))
     MAX_RETRIES = int(os.getenv('MAX_RETRIES', '1'))  # 1回リトライのみ
-    REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '180'))  # 180秒（大量データ処理対応、Geminiバッチ生成対応）
+    REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '240'))  # 240秒（504タイムアウト対策：Gemini base_timeout=120秒×2）
     
     # OCR Settings
     OCR_LANGUAGES = os.getenv('OCR_LANGUAGES', 'jpn+eng')

@@ -109,8 +109,8 @@ class GeminiProvider(LLMProvider):
         
         # Add request timeout and retry logic（空返し対策強化＋大量データ対応）
         import time
-        max_retries = 2
-        base_timeout = 60  # seconds（大量データ処理対応、元の25秒から増量）
+        max_retries = 3  # 3回リトライ（504タイムアウト対策）
+        base_timeout = 120  # seconds（504タイムアウト対策：60秒→120秒に延長）
 
         for attempt in range(max_retries):
             try:
@@ -129,8 +129,10 @@ class GeminiProvider(LLMProvider):
                     # Final attempt failed
                     raise call_error
                 else:
-                    log.warning(f"Gemini API call attempt {attempt + 1} failed: {call_error}, retrying in {2 ** attempt}s")
-                    time.sleep(2 ** attempt)  # Exponential backoff
+                    # 指数バックオフ（1秒→2秒→4秒）
+                    backoff_time = 2 ** attempt
+                    log.warning(f"Gemini API call attempt {attempt + 1} failed: {call_error}, retrying in {backoff_time}s")
+                    time.sleep(backoff_time)
 
         # Extract usage metadata (handle missing metadata gracefully)
         meta = getattr(resp, "usage_metadata", None)

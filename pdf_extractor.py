@@ -739,23 +739,25 @@ class ProductionPDFExtractor:
                 
                 # Provider-specific image optimization
                 if self.provider_name == "gemini":
-                    # Gemini optimization: smaller size, lower quality
+                    # Gemini optimization: smaller size, lower quality（504タイムアウト対策強化）
                     original_size = img.size
-                    max_dimension = 1024  # Reduce max dimension for Gemini
-                    
+                    max_dimension = 768  # 1024→768に削減（画像サイズ削減でタイムアウト対策）
+
                     # Calculate new size maintaining aspect ratio
                     if max(original_size) > max_dimension:
                         ratio = max_dimension / max(original_size)
                         new_size = (int(original_size[0] * ratio), int(original_size[1] * ratio))
                         img = img.resize(new_size, Image.Resampling.LANCZOS)
                         logger.info(f"Gemini image optimization: {original_size} -> {new_size}")
-                    
-                    # Convert to JPEG with lower quality for Gemini
+
+                    # Convert to JPEG with lower quality for Gemini（品質75→65に低下）
                     jpeg_buffer = io.BytesIO()
                     if img.mode in ("RGBA", "LA", "P"):
                         img = img.convert("RGB")
-                    img.save(jpeg_buffer, format="JPEG", quality=75, optimize=True)
+                    img.save(jpeg_buffer, format="JPEG", quality=65, optimize=True)
                     jpeg_data = jpeg_buffer.getvalue()
+
+                    logger.info(f"Gemini JPEG size: {len(jpeg_data)} bytes")
                     
                 else:
                     # Standard conversion for other providers
