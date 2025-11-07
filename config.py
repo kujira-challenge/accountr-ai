@@ -131,7 +131,7 @@ class Config:
     DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
     
     # PDF Processing
-    PAGES_PER_SPLIT = int(os.getenv('PAGES_PER_SPLIT', '5'))  # 5ページ単位投入（安定化）
+    PAGES_PER_SPLIT = int(os.getenv('PAGES_PER_SPLIT', '3'))  # 3ページ単位投入（大量データ対応、タイムアウト防止）
     MAX_FILE_SIZE_MB = int(os.getenv('MAX_FILE_SIZE_MB', '50'))
     PDF_DPI = int(os.getenv('PDF_DPI', '200'))  # 150-200DPI推奨、過度な圧縮回避
     
@@ -146,7 +146,7 @@ class Config:
     # API Rate Limiting
     API_REQUEST_INTERVAL = float(os.getenv('API_REQUEST_INTERVAL', '2'))
     MAX_RETRIES = int(os.getenv('MAX_RETRIES', '1'))  # 1回リトライのみ
-    REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '120'))  # Increased timeout for Gemini JSON mode retries
+    REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '180'))  # 180秒（大量データ処理対応、Geminiバッチ生成対応）
     
     # OCR Settings
     OCR_LANGUAGES = os.getenv('OCR_LANGUAGES', 'jpn+eng')

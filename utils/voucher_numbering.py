@@ -32,8 +32,14 @@ HEADER_KEYWORDS = re.compile(
 # 1ブロックの最大行数（安全弁）
 MAX_BLOCK_SIZE = 50
 
+# 早期フラッシュの推奨サイズ（パフォーマンス最適化）
+RECOMMENDED_BLOCK_SIZE = 20
+
 # 貸借一致の許容誤差（円）
 BALANCE_TOLERANCE = 1
+
+# 累積金額の上限（異常に大きなブロックを防ぐ）
+MAX_CUMULATIVE_AMOUNT = 100_000_000  # 1億円
 
 
 def is_header_line(row: Dict[str, Any]) -> bool:
@@ -117,6 +123,8 @@ def assign_voucher_numbers(
         "balanced_blocks": 0,
         "header_closes": 0,
         "balance_closes": 0,
+        "early_flush_closes": 0,
+        "amount_overflow_closes": 0,
         "overflow_closes": 0,
         "eof_closes": 0,
         "unbalanced_blocks": 0
@@ -161,6 +169,10 @@ def assign_voucher_numbers(
             stats["header_closes"] += 1
         elif reason == "BALANCE_CLOSE":
             stats["balance_closes"] += 1
+        elif reason == "EARLY_FLUSH":
+            stats["early_flush_closes"] += 1
+        elif reason == "AMOUNT_OVERFLOW":
+            stats["amount_overflow_closes"] += 1
         elif reason == "OVERFLOW":
             stats["overflow_closes"] += 1
         elif reason == "EOF":
@@ -223,13 +235,31 @@ def assign_voucher_numbers(
 
         # 貸借一致判定 → ブロックをクローズ
         # 条件: 貸借一致 AND 同一日付
-        if (
+        is_balanced = (
             sum_debit > 0
             and sum_credit > 0
             and abs(sum_debit - sum_credit) <= BALANCE_TOLERANCE
             and len({r.get("伝票日付", "") for r in current_block}) == 1
-        ):
+        )
+
+        if is_balanced:
             flush_block("BALANCE_CLOSE")
+
+        # 早期フラッシュ判定（パフォーマンス最適化）
+        # 推奨サイズに達した場合、貸借がほぼ一致していればフラッシュ
+        elif (
+            len(current_block) >= RECOMMENDED_BLOCK_SIZE
+            and sum_debit > 0
+            and sum_credit > 0
+            and abs(sum_debit - sum_credit) <= BALANCE_TOLERANCE * 10  # 許容誤差を10倍に緩和
+        ):
+            flush_block("EARLY_FLUSH")
+            logger.debug(f"早期フラッシュ: {len(current_block)}行, 差額={abs(sum_debit - sum_credit)}円")
+
+        # 累積金額上限チェック → 異常に大きなブロックを防ぐ
+        elif (sum_debit + sum_credit) > MAX_CUMULATIVE_AMOUNT:
+            flush_block("AMOUNT_OVERFLOW")
+            logger.warning(f"累積金額上限超過: 借方={sum_debit}円, 貸方={sum_credit}円")
 
         # オーバーフロー判定 → 強制クローズ
         elif len(current_block) >= MAX_BLOCK_SIZE:
@@ -244,6 +274,7 @@ def assign_voucher_numbers(
         f"仕訳No付番完了: {len(result)}行, {stats['total_blocks']}ブロック, "
         f"一致={stats['balanced_blocks']}, 不一致={stats['unbalanced_blocks']}, "
         f"ヘッダ分割={stats['header_closes']}, 金額一致={stats['balance_closes']}, "
+        f"早期フラッシュ={stats['early_flush_closes']}, 金額上限={stats['amount_overflow_closes']}, "
         f"オーバーフロー={stats['overflow_closes']}, EOF={stats['eof_closes']}"
     )
 

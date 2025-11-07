@@ -63,18 +63,18 @@ class GeminiProvider(LLMProvider):
         genai.configure(api_key=api_key)
         self.pr_in, self.pr_out = pricing_in, pricing_out
 
-    def _call(self, model: str, system: str, user: str, images_b64: List[bytes], *, json_mode: bool = False, max_out: int = 8192):
+    def _call(self, model: str, system: str, user: str, images_b64: List[bytes], *, json_mode: bool = False, max_out: int = 16384):
         """Internal call method with configurable JSON mode and token limits"""
         parts = [JSON_SYSTEM_GUARD + "\n\n" + system + "\n\n" + user]
         for b in images_b64:
             parts.append(_to_blob(b))
 
-        # Generation configuration（空返し対策強化）
+        # Generation configuration（空返し対策強化＋大量仕訳データ対応）
         gen_cfg = {
             "temperature": 0.2,
             "top_p": 0.9,
             "top_k": 40,
-            "max_output_tokens": max_out
+            "max_output_tokens": max_out  # デフォルト16384に増量（大量JSON配列対応）
         }
         
         # Advanced safety settings - maximally permissive for business document extraction
@@ -107,10 +107,10 @@ class GeminiProvider(LLMProvider):
 
         mdl = genai.GenerativeModel(model_name=model, safety_settings=SAFETY_SETTINGS)
         
-        # Add request timeout and retry logic（空返し対策強化）
+        # Add request timeout and retry logic（空返し対策強化＋大量データ対応）
         import time
         max_retries = 2
-        base_timeout = 25  # seconds（短縮）
+        base_timeout = 60  # seconds（大量データ処理対応、元の25秒から増量）
 
         for attempt in range(max_retries):
             try:
@@ -149,7 +149,7 @@ class GeminiProvider(LLMProvider):
         try:
             # Step 1: Normal mode attempt（早期フォールバック）
             log.info(f"Gemini Step 1: Normal mode with {model}")
-            resp, tin, tout = self._call(model, system, user, images, json_mode=False, max_out=8192)
+            resp, tin, tout = self._call(model, system, user, images, json_mode=False, max_out=16384)
             text = _first_text(resp)
             total_tin, total_tout = tin, tout
 
