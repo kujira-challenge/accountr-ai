@@ -97,7 +97,7 @@ class AnthropicProvider(LLMProvider):
                 system=system,
                 messages=[{"role": "user", "content": content}],
                 temperature=temperature,
-                max_tokens=4096
+                max_tokens=16384  # Claude最適化: 適切な出力上限（コスト効率重視）
             )
             
             # Safe token count extraction

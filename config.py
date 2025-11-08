@@ -109,8 +109,8 @@ class Config:
         return self._get_secret('GOOGLE_API_KEY')
     
     ANTHROPIC_MODEL = os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-20250514')
-    ANTHROPIC_MAX_TOKENS = int(os.getenv('ANTHROPIC_MAX_TOKENS', '64000'))
-    ANTHROPIC_BETA_HEADERS = os.getenv('ANTHROPIC_BETA_HEADERS', 'context-1m-2025-2025-08-07')
+    ANTHROPIC_MAX_TOKENS = int(os.getenv('ANTHROPIC_MAX_TOKENS', '64000'))  # Claude最適化: 大量データ処理対応
+    ANTHROPIC_BETA_HEADERS = os.getenv('ANTHROPIC_BETA_HEADERS', 'context-1m-2025-08-07')  # 修正: 不正な日付形式を修正
     
     # OCR.space API
     OCR_SPACE_API_KEY = os.getenv('OCR_SPACE_API_KEY')
@@ -131,9 +131,9 @@ class Config:
     DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
     
     # PDF Processing
-    PAGES_PER_SPLIT = int(os.getenv('PAGES_PER_SPLIT', '3'))  # 3ページ単位投入（大量データ対応、タイムアウト防止）
+    PAGES_PER_SPLIT = int(os.getenv('PAGES_PER_SPLIT', '7'))  # Claude最適化: バランス型（API呼び出し回数と画像サイズのトレードオフ）
     MAX_FILE_SIZE_MB = int(os.getenv('MAX_FILE_SIZE_MB', '50'))
-    PDF_DPI = int(os.getenv('PDF_DPI', '150'))  # 150DPI（画像サイズ削減でGeminiタイムアウト対策）
+    PDF_DPI = int(os.getenv('PDF_DPI', '150'))  # Claude最適化: 150DPI（品質とコストのバランス）
     
     # Right column zoom for credit side improvement
     RIGHT_COL_ZOOM = _yaml_config.get('pdf', {}).get('right_col_zoom', False)
@@ -144,9 +144,9 @@ class Config:
     VOUCHER_NO_WIDTH = int(_yaml_config.get('processing', {}).get('voucher_no_width', 4))  # 4桁0001-9999形式
     
     # API Rate Limiting
-    API_REQUEST_INTERVAL = float(os.getenv('API_REQUEST_INTERVAL', '2'))
+    API_REQUEST_INTERVAL = float(os.getenv('API_REQUEST_INTERVAL', '1'))  # Claude最適化: レート制限緩和（2秒→1秒）
     MAX_RETRIES = int(os.getenv('MAX_RETRIES', '1'))  # 1回リトライのみ
-    REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '240'))  # 240秒（504タイムアウト対策：Gemini base_timeout=120秒×2）
+    REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '300'))  # Claude最適化: 300秒（大量データ処理に対応）
     
     # OCR Settings
     OCR_LANGUAGES = os.getenv('OCR_LANGUAGES', 'jpn+eng')

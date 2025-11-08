@@ -216,8 +216,8 @@ class ProductionPDFExtractor:
             except AttributeError:
                 # Fallback for missing property
                 self.api_key = os.environ.get("GOOGLE_API_KEY")
-        self.max_tokens = 4096
-            
+        self.max_tokens = 16384  # Claude最適化: 適切な出力上限（コスト効率重視）
+
         self.use_mock = False  # モックモード完全撤廃
         
         # Initialize LLM provider
@@ -237,8 +237,8 @@ class ProductionPDFExtractor:
         self.max_concurrent_requests = config.MAX_CONCURRENT_REQUESTS
         self.worker_pool_size = config.WORKER_POOL_SIZE
         
-        # File processing settings - 5ページ単位で安定化
-        self.pages_per_split = 5
+        # File processing settings - Claude最適化: 7ページ単位でバランス型処理
+        self.pages_per_split = 7
         self.max_file_size = config.MAX_FILE_SIZE_MB * 1024 * 1024  # Convert to bytes
         
         # Security settings
@@ -758,7 +758,26 @@ class ProductionPDFExtractor:
                     jpeg_data = jpeg_buffer.getvalue()
 
                     logger.info(f"Gemini JPEG size: {len(jpeg_data)} bytes")
-                    
+
+                elif self.provider_name == "anthropic":
+                    # Claude最適化: 適度な品質でコスト効率向上（最大1536px、品質85）
+                    original_size = img.size
+                    max_dimension = 1536  # Claudeの推奨最大サイズ
+
+                    # 必要に応じてリサイズ
+                    if max(original_size) > max_dimension:
+                        ratio = max_dimension / max(original_size)
+                        new_size = (int(original_size[0] * ratio), int(original_size[1] * ratio))
+                        img = img.resize(new_size, Image.Resampling.LANCZOS)
+                        logger.debug(f"Claude image resize: {original_size} -> {new_size}")
+
+                    jpeg_buffer = io.BytesIO()
+                    if img.mode in ("RGBA", "LA", "P"):
+                        img = img.convert("RGB")
+                    img.save(jpeg_buffer, format="JPEG", quality=85, optimize=True)
+                    jpeg_data = jpeg_buffer.getvalue()
+                    logger.debug(f"Claude optimized JPEG: {len(jpeg_data)} bytes")
+
                 else:
                     # Standard conversion for other providers
                     jpeg_buffer = io.BytesIO()

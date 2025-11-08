@@ -6,9 +6,9 @@ pdf:
   # Right column zoom for credit side recognition improvement
   right_col_zoom: true
   # DPI settings for image conversion
-  dpi: 180
+  dpi: 150  # Claude最適化: バランス型（品質とコストのトレードオフ）
   # Pages per split for processing
-  pages_per_split: 5
+  pages_per_split: 7  # Claude最適化: バランス型（API呼び出し回数と画像サイズのトレードオフ）
 
 # LLM Provider Settings
 llm:
@@ -36,7 +36,7 @@ pricing:
 claude:
   # Model configuration
   model: "claude-sonnet-4-20250514"
-  max_tokens: 4096
+  max_tokens: 16384  # Claude最適化: 適切な出力上限（コスト効率重視）
   temperature: 0
   # Enhanced prompt for right column recognition
   enhanced_prompts: true
