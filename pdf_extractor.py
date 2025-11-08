@@ -256,6 +256,7 @@ class ProductionPDFExtractor:
         }
         
         logger.info(f"ProductionPDFExtractor initialized - Provider: {self.api_provider}, Model: {self.model_name}")
+        logger.info(f"[CONFIG] pages_per_split={self.pages_per_split}, max_tokens={self.max_tokens}, api_interval={self.api_interval}s, max_concurrent={self.max_concurrent_requests}")
     
     def _load_config(self) -> dict:
         """Load configuration from config.yaml"""
@@ -1118,6 +1119,7 @@ JSONオブジェクト配列のみ。5キー必須: ["伝票日付","借貸区�
             pdf_temp_dir.mkdir(parents=True, exist_ok=True)
             
             # Split PDF
+            logger.info(f"[CONFIG] Splitting PDF with pages_per_split={pages_per_split}")
             split_files = self.split_pdf(pdf_path, pdf_temp_dir, pages_per_split)
             
             if not split_files:
