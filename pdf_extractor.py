@@ -668,7 +668,8 @@ class ProductionPDFExtractor:
         return mask_list_for_logging(data, sample_size=2)
     
     def _call_llm_with_fallback(self, system_prompt: str, user_prompt: str, images_b64: List[str]) -> Tuple[str, float]:
-        """Call primary LLM with Anthropic fallback for non-Anthropic providers"""
+        """Call primary LLM (Gemini only, fallback disabled)"""
+        # 現在はGemini一本で動作（フォールバック処理は無効化）
         try:
             # Primary LLM attempt
             result = self.llm_provider.generate(
@@ -678,49 +679,54 @@ class ProductionPDFExtractor:
                 model=self.model_name,
                 temperature=self.temperature
             )
-            
+
             response_text = result.text.strip()
-            logger.info(f"{self.provider_name} primary success: {len(response_text)} chars, cost=${result.cost_usd:.4f}")
+            logger.info(f"{self.provider_name} success: {len(response_text)} chars, cost=${result.cost_usd:.4f}")
             return response_text, result.cost_usd
-            
+
         except Exception as primary_error:
-            logger.error(f"Primary LLM failed ({self.provider_name}={self.model_name}): {primary_error}")
-            
-            # Fallback to Anthropic if primary provider is not Anthropic
-            if self.provider_name != "anthropic":
-                logger.warning(f"Attempting Anthropic fallback for failed {self.provider_name}")
-                try:
-                    from llm_providers.factory import build as build_llm
-                    
-                    # Load pricing for Anthropic fallback
-                    fallback_pricing = self.pricing.get("anthropic", {}).get("claude-sonnet-4-20250514", {"in": 0.003, "out": 0.015})
-                    
-                    # Create Anthropic provider
-                    anthropic_provider = build_llm("anthropic", "claude-sonnet-4-20250514", {"anthropic": {"claude-sonnet-4-20250514": fallback_pricing}})
-                    
-                    # Attempt with Anthropic
-                    result = anthropic_provider.generate(
-                        system=system_prompt,
-                        user=user_prompt,
-                        images=images_b64,
-                        model="claude-sonnet-4-20250514",
-                        temperature=self.temperature
-                    )
-                    
-                    response_text = result.text.strip()
-                    logger.info(f"Anthropic fallback success: {len(response_text)} chars, cost=${result.cost_usd:.4f}")
-                    return response_text, result.cost_usd
-                    
-                except Exception as fallback_error:
-                    logger.error(f"Anthropic fallback also failed: {fallback_error}")
-                    # Final fallback - return structured dummy response
-                    fallback_response = '[{"伝票日付":"","借貸区分":"借方","科目名":"全API失敗","金額":1,"摘要":"全LLMプロバイダ失敗【手動確認必要】"}]'
-                    return fallback_response, 0.0
-            else:
-                # Primary was already Anthropic, no fallback available
-                logger.error("Anthropic primary failed and no fallback available")
-                fallback_response = '[{"伝票日付":"","借貸区分":"借方","科目名":"Anthropic失敗","金額":1,"摘要":"Anthropic処理失敗【手動確認必要】"}]'
-                return fallback_response, 0.0
+            logger.error(f"LLM failed ({self.provider_name}={self.model_name}): {primary_error}")
+            # フォールバック処理は無効化（Gemini一本運用）
+            # エラー時はダミーレスポンスを返す
+            fallback_response = f'[{{"伝票日付":"","借貸区分":"借方","科目名":"{self.provider_name}失敗","金額":1,"摘要":"{self.provider_name}処理失敗【手動確認必要】"}}]'
+            return fallback_response, 0.0
+
+            # 将来的にフォールバック処理を復活させる場合は、以下のコメントを外す
+            # # Fallback to Anthropic if primary provider is not Anthropic
+            # if self.provider_name != "anthropic":
+            #     logger.warning(f"Attempting Anthropic fallback for failed {self.provider_name}")
+            #     try:
+            #         from llm_providers.factory import build as build_llm
+            #
+            #         # Load pricing for Anthropic fallback
+            #         fallback_pricing = self.pricing.get("anthropic", {}).get("claude-sonnet-4-20250514", {"in": 0.003, "out": 0.015})
+            #
+            #         # Create Anthropic provider
+            #         anthropic_provider = build_llm("anthropic", "claude-sonnet-4-20250514", {"anthropic": {"claude-sonnet-4-20250514": fallback_pricing}})
+            #
+            #         # Attempt with Anthropic
+            #         result = anthropic_provider.generate(
+            #             system=system_prompt,
+            #             user=user_prompt,
+            #             images=images_b64,
+            #             model="claude-sonnet-4-20250514",
+            #             temperature=self.temperature
+            #         )
+            #
+            #         response_text = result.text.strip()
+            #         logger.info(f"Anthropic fallback success: {len(response_text)} chars, cost=${result.cost_usd:.4f}")
+            #         return response_text, result.cost_usd
+            #
+            #     except Exception as fallback_error:
+            #         logger.error(f"Anthropic fallback also failed: {fallback_error}")
+            #         # Final fallback - return structured dummy response
+            #         fallback_response = '[{"伝票日付":"","借貸区分":"借方","科目名":"全API失敗","金額":1,"摘要":"全LLMプロバイダ失敗【手動確認必要】"}]'
+            #         return fallback_response, 0.0
+            # else:
+            #     # Primary was already Anthropic, no fallback available
+            #     logger.error("Anthropic primary failed and no fallback available")
+            #     fallback_response = '[{"伝票日付":"","借貸区分":"借方","科目名":"Anthropic失敗","金額":1,"摘要":"Anthropic処理失敗【手動確認必要】"}]'
+            #     return fallback_response, 0.0
 
     def _call_claude_api(self, system_prompt: str, user_prompt: str, images_b64: List[str]) -> Tuple[str, float]:
         """Call LLM API with system prompt and images using provider abstraction"""

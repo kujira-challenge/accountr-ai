@@ -83,25 +83,29 @@ def load_llm_config():
 cfg = load_llm_config()
 
 # Provider selection
-providers = ["anthropic", "gemini", "openai"]
+# 現在はGeminiのみ有効（他のプロバイダは一時的に無効化）
+# providers = ["anthropic", "gemini", "openai"]  # 将来的に復活させる場合はこの行のコメントを外す
+providers = ["gemini"]  # Geminiのみ有効
 provider_index = 0
 try:
-    provider_index = providers.index(cfg["llm"]["provider"])
+    if cfg["llm"]["provider"] in providers:
+        provider_index = providers.index(cfg["llm"]["provider"])
 except (KeyError, ValueError):
     pass
 
 provider = st.sidebar.selectbox(
-    "LLMプロバイダ", 
-    providers, 
+    "LLMプロバイダ",
+    providers,
     index=provider_index,
-    help="APIコストを削減したい場合はGeminiを選択、最新モデル使用はClaude Sonnet 4やGPT-5を選択"
+    help="Gemini APIを使用してPDFから仕訳データを抽出します"
+    # help="APIコストを削減したい場合はGeminiを選択、最新モデル使用はClaude Sonnet 4やGPT-5を選択"  # 複数プロバイダ有効時
 )
 
 # Model selection based on provider
 models_by_provider = {
-    "anthropic": ["claude-sonnet-4-20250514", "claude-3-5-sonnet-20240620", "claude-3-5-haiku-20240307"],
+    # "anthropic": ["claude-sonnet-4-20250514", "claude-3-5-sonnet-20240620", "claude-3-5-haiku-20240307"],  # 将来的に復活させる場合
     "gemini": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"],
-    "openai": ["gpt-5", "gpt-5-mini"]
+    # "openai": ["gpt-5", "gpt-5-mini"]  # 将来的に復活させる場合
 }
 
 model_index = 0
@@ -113,10 +117,11 @@ except (KeyError, ValueError):
     pass
 
 model = st.sidebar.selectbox(
-    "モデル", 
-    models_by_provider[provider], 
+    "モデル",
+    models_by_provider[provider],
     index=model_index,
-    help="Flash系モデルはコストが安く、Pro/Sonnet系は精度重視"
+    help="Flash系モデルはコストが安く、Pro系は精度重視"
+    # help="Flash系モデルはコストが安く、Pro/Sonnet系は精度重視"  # 複数プロバイダ有効時
 )
 
 # Temperature setting
@@ -138,12 +143,15 @@ st.session_state.llm_config = {
     "temperature": temp
 }
 
-# Show cost estimation with current exchange rate
+# Show cost estimation with current exchange rate (一時的にコメントアウト)
+# pricing = cfg.get("pricing", {})
+# if provider in pricing and model in pricing[provider]:
+#     model_pricing = pricing[provider][model]
+#     current_rate = config.get_current_usd_to_jpy_rate()
+#     st.sidebar.info(f"💰 {provider.title()} {model} 単価:\n入力: ¥{model_pricing['in']*current_rate:.4f}/1kトークン\n出力: ¥{model_pricing['out']*current_rate:.4f}/1kトークン\n為替レート: ¥{current_rate:.0f}/USD")
+
+# pricing変数は後で使われるので定義だけ残す
 pricing = cfg.get("pricing", {})
-if provider in pricing and model in pricing[provider]:
-    model_pricing = pricing[provider][model]
-    current_rate = config.get_current_usd_to_jpy_rate()
-    st.sidebar.info(f"💰 {provider.title()} {model} 単価:\n入力: ¥{model_pricing['in']*current_rate:.4f}/1kトークン\n出力: ¥{model_pricing['out']*current_rate:.4f}/1kトークン\n為替レート: ¥{current_rate:.0f}/USD")
 
 # サイドバー - システム情報
 with st.sidebar:
@@ -154,34 +162,37 @@ with st.sidebar:
     
     # API設定確認とエラーハンドリング
     try:
-        if provider == "anthropic":
-            api_key = config.ANTHROPIC_API_KEY
-            if api_key and api_key != 'DUMMY_API_KEY':
-                st.success("✅ Anthropic API接続準備完了")
-            else:
-                st.error("❌ Anthropic APIキーが未設定")
-                st.warning("Settings > Secrets でANTHROPIC_API_KEYを設定してください")
-        elif provider == "gemini":
+        # 現在はGeminiのみ有効
+        if provider == "gemini":
             try:
                 api_key = config.GOOGLE_API_KEY
             except AttributeError:
                 # Fallback to direct environment access
                 import os
                 api_key = os.environ.get("GOOGLE_API_KEY")
-            
+
             if api_key:
                 st.success("✅ Gemini API接続準備完了")
             else:
                 st.error("❌ Gemini APIキーが未設定")
                 st.warning("Settings > Secrets でGOOGLE_API_KEYを設定してください")
-        else:  # openai
-            import os
-            api_key = os.environ.get("OPENAI_API_KEY")
-            if api_key:
-                st.success("✅ OpenAI API接続準備完了")
-            else:
-                st.error("❌ OpenAI APIキーが未設定")
-                st.warning("Settings > Secrets でOPENAI_API_KEYを設定してください")
+
+        # 他のプロバイダは一時的に無効化（将来的に復活させる場合は以下のコメントを外す）
+        # elif provider == "anthropic":
+        #     api_key = config.ANTHROPIC_API_KEY
+        #     if api_key and api_key != 'DUMMY_API_KEY':
+        #         st.success("✅ Anthropic API接続準備完了")
+        #     else:
+        #         st.error("❌ Anthropic APIキーが未設定")
+        #         st.warning("Settings > Secrets でANTHROPIC_API_KEYを設定してください")
+        # elif provider == "openai":
+        #     import os
+        #     api_key = os.environ.get("OPENAI_API_KEY")
+        #     if api_key:
+        #         st.success("✅ OpenAI API接続準備完了")
+        #     else:
+        #         st.error("❌ OpenAI APIキーが未設定")
+        #         st.warning("Settings > Secrets でOPENAI_API_KEYを設定してください")
     except Exception as e:
         st.error(f"❌ API設定エラー: {str(e)}")
         st.info("💡 設定を確認してアプリを再起動してください")
@@ -213,76 +224,82 @@ with col2:
         st.info(f"📊 **サイズ:** {uploaded_file.size / 1024 / 1024:.1f} MB")
 
 # APIキーチェック
-current_provider = st.session_state.llm_config.get("provider", "anthropic")
-if current_provider == "anthropic":
-    try:
-        anthropic_key = config.ANTHROPIC_API_KEY
-        if not anthropic_key or anthropic_key == 'DUMMY_API_KEY':
-            st.error("🚫 Anthropic APIキーが設定されていません")
-            st.info("📝 デプロイ後の設定が必要です。README.mdの手順に従ってAPIキーを設定してください。")
-            st.stop()
-    except AttributeError:
-        st.error("🚫 Configuration error: ANTHROPIC_API_KEY property not available")
-        st.info("Please check your config.py file and restart the app.")
-        st.stop()
-elif current_provider == "gemini":
+current_provider = st.session_state.llm_config.get("provider", "gemini")  # デフォルトをgeminiに変更
+# 現在はGeminiのみ有効
+if current_provider == "gemini":
     try:
         google_api_key = config.GOOGLE_API_KEY
     except AttributeError:
         # Fallback to direct environment access
         import os
         google_api_key = os.environ.get("GOOGLE_API_KEY")
-    
+
     if not google_api_key:
         st.error("🚫 Gemini APIキーが設定されていません")
         st.info("📝 デプロイ後の設定が必要です。Streamlit SecretsでGOOGLE_API_KEYを設定してください。")
         st.stop()
-else:  # openai
-    import os
-    if not os.environ.get("OPENAI_API_KEY"):
-        st.error("🚫 OpenAI APIキーが設定されていません")
-        st.info("📝 デプロイ後の設定が必要です。Streamlit SecretsでOPENAI_API_KEYを設定してください。")
-        st.stop()
+
+# 他のプロバイダは一時的に無効化（将来的に復活させる場合は以下のコメントを外す）
+# elif current_provider == "anthropic":
+#     try:
+#         anthropic_key = config.ANTHROPIC_API_KEY
+#         if not anthropic_key or anthropic_key == 'DUMMY_API_KEY':
+#             st.error("🚫 Anthropic APIキーが設定されていません")
+#             st.info("📝 デプロイ後の設定が必要です。README.mdの手順に従ってAPIキーを設定してください。")
+#             st.stop()
+#     except AttributeError:
+#         st.error("🚫 Configuration error: ANTHROPIC_API_KEY property not available")
+#         st.info("Please check your config.py file and restart the app.")
+#         st.stop()
+# elif current_provider == "openai":
+#     import os
+#     if not os.environ.get("OPENAI_API_KEY"):
+#         st.error("🚫 OpenAI APIキーが設定されていません")
+#         st.info("📝 デプロイ後の設定が必要です。Streamlit SecretsでOPENAI_API_KEYを設定してください。")
+#         st.stop()
 
 # 変換処理 - 抽出開始ボタン
 if uploaded_file is not None:
     
-    # 動的概算費用計算（選択されたモデルの価格に基づく）
-    def calculate_flexible_estimate(file_size_bytes, provider, model, pricing_config):
-        """選択されたモデルに基づく動的費用概算"""
-        # ページ数推定（より正確に）
-        estimated_pages = max(1, int(file_size_bytes / (1024 * 250)))  # 250KB/ページ仮定
-        
-        # モデル価格を取得
-        model_pricing = pricing_config.get(provider, {}).get(model, {"in": 0.003, "out": 0.015})
-        
-        # トークン数推定（ページあたり）
-        tokens_per_page_input = 1500  # 画像+プロンプト概算
-        tokens_per_page_output = 800  # レスポンス概算
-        
-        total_input_tokens = estimated_pages * tokens_per_page_input
-        total_output_tokens = estimated_pages * tokens_per_page_output
-        
-        # コスト計算
-        cost_usd = (total_input_tokens / 1000 * model_pricing["in"] + 
-                   total_output_tokens / 1000 * model_pricing["out"])
-        
-        return estimated_pages, cost_usd
-    
-    estimated_pages, estimate_cost_usd = calculate_flexible_estimate(
-        uploaded_file.size, provider, model, pricing
-    )
-    estimate_cost_jpy = estimate_cost_usd * config.get_current_usd_to_jpy_rate()
-    
-    # 概算コスト表示（選択モデル情報付き）
+    # 動的概算費用計算（選択されたモデルの価格に基づく）- 一時的にコメントアウト
+    # def calculate_flexible_estimate(file_size_bytes, provider, model, pricing_config):
+    #     """選択されたモデルに基づく動的費用概算"""
+    #     # ページ数推定（より正確に）
+    #     estimated_pages = max(1, int(file_size_bytes / (1024 * 250)))  # 250KB/ページ仮定
+    #
+    #     # モデル価格を取得
+    #     model_pricing = pricing_config.get(provider, {}).get(model, {"in": 0.003, "out": 0.015})
+    #
+    #     # トークン数推定（ページあたり）
+    #     tokens_per_page_input = 1500  # 画像+プロンプト概算
+    #     tokens_per_page_output = 800  # レスポンス概算
+    #
+    #     total_input_tokens = estimated_pages * tokens_per_page_input
+    #     total_output_tokens = estimated_pages * tokens_per_page_output
+    #
+    #     # コスト計算
+    #     cost_usd = (total_input_tokens / 1000 * model_pricing["in"] +
+    #                total_output_tokens / 1000 * model_pricing["out"])
+    #
+    #     return estimated_pages, cost_usd
+    #
+    # estimated_pages, estimate_cost_usd = calculate_flexible_estimate(
+    #     uploaded_file.size, provider, model, pricing
+    # )
+    # estimate_cost_jpy = estimate_cost_usd * config.get_current_usd_to_jpy_rate()
+    #
+    # # 概算コスト表示（選択モデル情報付き）
+    # current_model_display = f"{provider.title()} {model}"
+    # st.info(f"📊 **概算** ({current_model_display}): {estimated_pages}ページ予想 / 概算費用: ¥{estimate_cost_jpy:.0f} (${estimate_cost_usd:.3f} USD)")
+    #
+    # # 価格情報表示
+    # if provider in pricing and model in pricing[provider]:
+    #     model_pricing = pricing[provider][model]
+    #     current_rate = config.get_current_usd_to_jpy_rate()
+    #     st.caption(f"💰 {current_model_display} 単価: 入力¥{model_pricing['in']*current_rate:.4f}/1kトークン, 出力¥{model_pricing['out']*current_rate:.4f}/1kトークン (為替レート: ¥{current_rate:.0f}/USD)")
+
+    # current_model_display変数は後で使われるので残す
     current_model_display = f"{provider.title()} {model}"
-    st.info(f"📊 **概算** ({current_model_display}): {estimated_pages}ページ予想 / 概算費用: ¥{estimate_cost_jpy:.0f} (${estimate_cost_usd:.3f} USD)")
-    
-    # 価格情報表示
-    if provider in pricing and model in pricing[provider]:
-        model_pricing = pricing[provider][model]
-        current_rate = config.get_current_usd_to_jpy_rate()
-        st.caption(f"💰 {current_model_display} 単価: 入力¥{model_pricing['in']*current_rate:.4f}/1kトークン, 出力¥{model_pricing['out']*current_rate:.4f}/1kトークン (為替レート: ¥{current_rate:.0f}/USD)")
     
     # Current model display (already defined above)
     # current_model_display = f"{st.session_state.llm_config['provider'].title()} {st.session_state.llm_config['model']}"
@@ -447,44 +464,45 @@ if uploaded_file is not None:
         with col_result2:
             st.metric("処理時間", f"{processing_time:.1f}秒")
         with col_result3:
-            # API費用概算表示（トークンベース）
-            if processing_info.get("cost_jpy", 0) > 0:
-                # 最新レート情報を取得して表示
-                try:
-                    current_rate = config.get_current_usd_to_jpy_rate()
-                    rate_info = f"為替レート: {current_rate:.2f} JPY/USD"
-                except:
-                    rate_info = "為替レート: 取得失敗"
-                    
-                st.metric(
-                    "API費用実績", 
-                    f"¥{processing_info['cost_jpy']:.2f}",
-                    help=f"✅ トークン使用量ベースの実際の費用です。\n\n計算値: ${processing_info['cost_usd']:.4f} USD\n{rate_info}\nClaude API利用料金×使用トークン数\n\n※ 為替レート変動により表示金額と請求額が異なる場合があります"
-                )
-            else:
-                # フォールバック: トークン情報不明時は概算表示
-                pages_processed = processing_info.get('pages_processed', max(1, len(df) // 5))
-                
-                # 選択されたモデルの価格に基づく柔軟な概算
-                current_provider = st.session_state.llm_config.get('provider', 'anthropic')
-                current_model = st.session_state.llm_config.get('model', 'claude-sonnet-4-20250514')
-                
-                model_pricing = pricing.get(current_provider, {}).get(current_model, {'in': 0.003, 'out': 0.015})
-                
-                # より正確な概算（モデル価格ベース）
-                estimated_tokens_in = pages_processed * 1500  # 入力トークン推定
-                estimated_tokens_out = pages_processed * 800  # 出力トークン推定
-                estimated_cost_usd = (estimated_tokens_in / 1000 * model_pricing['in'] + 
-                                    estimated_tokens_out / 1000 * model_pricing['out'])
-                
-                current_rate = config.get_current_usd_to_jpy_rate()
-                estimated_cost_jpy = estimated_cost_usd * current_rate
-                
-                st.metric(
-                    "API費用概算", 
-                    f"¥{estimated_cost_jpy:.0f}",
-                    help=f"概算 ({current_provider.title()} {current_model}): {pages_processed}ページ\n入力: {estimated_tokens_in}トークン, 出力: {estimated_tokens_out}トークン\n計算値: ${estimated_cost_usd:.4f} USD (為替: ¥{current_rate:.0f}/USD)\n\n※実際の費用はトークン数により変動します"
-                )
+            # API費用概算表示（トークンベース）- 一時的にコメントアウト
+            # if processing_info.get("cost_jpy", 0) > 0:
+            #     # 最新レート情報を取得して表示
+            #     try:
+            #         current_rate = config.get_current_usd_to_jpy_rate()
+            #         rate_info = f"為替レート: {current_rate:.2f} JPY/USD"
+            #     except:
+            #         rate_info = "為替レート: 取得失敗"
+            #
+            #     st.metric(
+            #         "API費用実績",
+            #         f"¥{processing_info['cost_jpy']:.2f}",
+            #         help=f"✅ トークン使用量ベースの実際の費用です。\n\n計算値: ${processing_info['cost_usd']:.4f} USD\n{rate_info}\nClaude API利用料金×使用トークン数\n\n※ 為替レート変動により表示金額と請求額が異なる場合があります"
+            #     )
+            # else:
+            #     # フォールバック: トークン情報不明時は概算表示
+            #     pages_processed = processing_info.get('pages_processed', max(1, len(df) // 5))
+            #
+            #     # 選択されたモデルの価格に基づく柔軟な概算
+            #     current_provider = st.session_state.llm_config.get('provider', 'anthropic')
+            #     current_model = st.session_state.llm_config.get('model', 'claude-sonnet-4-20250514')
+            #
+            #     model_pricing = pricing.get(current_provider, {}).get(current_model, {'in': 0.003, 'out': 0.015})
+            #
+            #     # より正確な概算（モデル価格ベース）
+            #     estimated_tokens_in = pages_processed * 1500  # 入力トークン推定
+            #     estimated_tokens_out = pages_processed * 800  # 出力トークン推定
+            #     estimated_cost_usd = (estimated_tokens_in / 1000 * model_pricing['in'] +
+            #                         estimated_tokens_out / 1000 * model_pricing['out'])
+            #
+            #     current_rate = config.get_current_usd_to_jpy_rate()
+            #     estimated_cost_jpy = estimated_cost_usd * current_rate
+            #
+            #     st.metric(
+            #         "API費用概算",
+            #         f"¥{estimated_cost_jpy:.0f}",
+            #         help=f"概算 ({current_provider.title()} {current_model}): {pages_processed}ページ\n入力: {estimated_tokens_in}トークン, 出力: {estimated_tokens_out}トークン\n計算値: ${estimated_cost_usd:.4f} USD (為替: ¥{current_rate:.0f}/USD)\n\n※実際の費用はトークン数により変動します"
+            #     )
+            pass  # 費用表示を一時的に無効化
         
         # データプレビュー
         if not df.empty:
@@ -555,24 +573,54 @@ if uploaded_file is not None:
 st.divider()
 with st.expander("📖 使用方法とヒント"):
     st.markdown("""
-    ### 📋 使用手順
-    1. **PDFファイル選択**: 仕訳データが含まれるPDFファイルを選択
-    2. **抽出開始**: 「抽出開始」ボタンをクリックして処理を開始
-    3. **結果確認**: 抽出されたデータをプレビューで確認
-    4. **CSV出力**: 「ミロク取込45列CSVをダウンロード」でファイル保存
-    
-    ### 💡 処理のポイント
-    - **5ページチャンク処理**: PDFを5ページずつ安定的に分析・処理
-    - **高精度AI**: Claude Sonnet 4.0の視覚認識で正確な仕訳抽出
-    - **簡単操作**: ファイルアップロード後、ボタン1つで抽出開始
-    - **日本語対応**: 日本の会計基準に対応した仕訳形式で出力
-    
-    ### ⚠️ 注意事項
-    - **処理時間**: 大きなファイルや複雑なレイアウトは時間がかかります
-    - **データ精度**: 手書きや画質の悪いPDFは抽出精度が下がる場合があります
-    - **プライバシー**: アップロードファイルは一時的にメモリ上で処理され、サーバーには保存されません
+    ### 📋 基本的な使い方
+    1. **PDFファイルをアップロード**
+       - 上の「📁 PDFファイルを選択してください」エリアをクリック
+       - または、ファイルをドラッグ&ドロップ
+       - 対応形式: PDFファイル (.pdf)
+
+    2. **抽出開始**
+       - 「🚀 抽出開始」ボタンをクリック
+       - 処理中は画面を閉じないでください
+
+    3. **結果を確認**
+       - 抽出された仕訳データが表示されます
+       - 摘要欄の内容を確認し、必要に応じて後で修正してください
+
+    4. **CSVファイルをダウンロード**
+       - 「📥 ミロク取込45列CSVをダウンロード」ボタンをクリック
+       - ダウンロードしたCSVファイルをミロク会計システムに取り込み
+
+    ### ⚠️ アップロード時の注意点
+    - **推奨ファイル**: 明細が表形式で記載された通帳・請求書・領収書のPDF
+    - **非推奨**: 手書き文字、スキャン品質が低い、文字が不鮮明なPDF
+    - **ファイルサイズ**: 大きなファイル（100ページ以上）は処理に数分かかる場合があります
+    - **レイアウト**: 表形式が崩れているPDFは抽出精度が下がることがあります
+
+    ### 🔧 トラブルシューティング
+    **Q: 抽出結果が空になる**
+    - PDFに表形式の仕訳データがあるか確認してください
+    - PDFの画質が悪い場合は、元ファイルを再取得してください
+
+    **Q: 金額が正しく抽出されない**
+    - 元のPDFで金額が明確に記載されているか確認してください
+    - カンマ区切りの数字が正しく表示されているか確認してください
+
+    **Q: 処理時間が長い**
+    - ページ数が多い場合は時間がかかります（目安: 5ページあたり10-20秒）
+    - 処理中は他の操作を行わず、完了まで待機してください
+
+    **Q: エラーが表示される**
+    - ページをリロードして再度お試しください
+    - それでも解決しない場合は、PDFファイルを確認してください
+
+    ### 🔒 セキュリティとプライバシー
+    - アップロードされたPDFは一時的にメモリ上で処理されます
+    - 処理完了後、サーバーにはデータが残りません
+    - 個人情報を含むデータは慎重に取り扱ってください
     """)
 
 # フッター
 st.divider()
-st.caption("📊 PDF仕訳抽出システム | Powered by Claude Sonnet 4.0 | Built with Streamlit")
+st.caption("📊 PDF仕訳抽出システム | Powered by Gemini | Built with Streamlit")
+# st.caption("📊 PDF仕訳抽出システム | Powered by Claude Sonnet 4.0 | Built with Streamlit")  # 将来的に復活させる場合
