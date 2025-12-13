@@ -79,13 +79,218 @@ def create_diag_snapshot(raw_response, parsed_data, reconciled_data, mjs45_csv, 
         logger.error(f"Failed to create diagnostic snapshot: {e}")
         return None
 
+def convert_to_miroku_csv(json_data: list) -> Tuple[pd.DataFrame, bytes, Dict[str, Any]]:
+    """
+    5カラムJSONデータをMJS45列CSV形式に変換
+
+    Args:
+        json_data: 5カラム形式のJSONデータリスト
+
+    Returns:
+        Tuple[pd.DataFrame, bytes, Dict[str, Any]]: (データフレーム, CSV bytes, 処理情報)
+    """
+    logger.info(f"Converting {len(json_data)} entries to MJS45 CSV format")
+
+    try:
+        # 一時ディレクトリの作成
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # ========== DIAG: stage1_parse ==========
+            stage1_count = len(json_data) if json_data else 0
+            logger.info(f"DIAG stage1_parse: count={stage1_count}")
+            if stage1_count == 0:
+                raise RuntimeError("DIAG stage1_parse=0: 入力JSONデータが空です。")
+
+            # 5カラムJSON→45列MJS CSV変換
+            if json_data:
+                # 1. 5カラムJSONを一時保存
+                json_path = temp_path / "extracted_data.json"
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(json_data, f, ensure_ascii=False, indent=2)
+
+                logger.info(f"5-column JSON saved: {json_path}")
+
+                # 2. 勘定科目CSVファイルの存在確認
+                account_code_csv_path = str(config.ACCOUNT_CODE_CSV_PATH)
+                if not Path(account_code_csv_path).exists():
+                    logger.error(f"Account code CSV file not found: {account_code_csv_path}")
+                    # 空の45列DataFrameを作成
+                    df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
+                    logger.warning("Using empty DataFrame due to missing account code CSV")
+                else:
+                    # 3. 45列CSVに変換
+                    mjs_csv_path = temp_path / "mjs45_output.csv"
+                    conversion_log_path = temp_path / "mjs_conversion.log"
+
+                    try:
+                        fivejson_to_mjs45(
+                            str(json_path),
+                            account_code_csv_path,
+                            str(mjs_csv_path),
+                            str(conversion_log_path)
+                        )
+
+                        # 4. 45列CSVを読み込んでDataFrameに変換
+                        if mjs_csv_path.exists():
+                            df = pd.read_csv(mjs_csv_path, encoding='utf-8-sig')
+
+                            # ========== DIAG: stage4_mjs45 ==========
+                            stage4_count = len(df)
+                            logger.info(f"DIAG stage4_mjs45: count={stage4_count}")
+                            if stage4_count == 0:
+                                raise RuntimeError("DIAG stage4_mjs45=0: コード割当結果が空。名寄せ/マスタ読込を確認してください。")
+
+                            logger.info(f"MJS 45-column CSV loaded: {stage4_count} rows")
+                        else:
+                            logger.error("MJS CSV file was not created")
+                            df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
+
+                            # ========== DIAG: stage4_mjs45 ==========
+                            logger.error(f"DIAG stage4_mjs45: count=0")
+                            raise RuntimeError("DIAG stage4_mjs45=0: MJSファイルが作成されませんでした。")
+
+                    except Exception as e:
+                        logger.error(f"MJS conversion failed: {e}")
+                        # フォールバック: 空の45列DataFrame
+                        df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
+
+            else:
+                # ========== DIAG: stage1_parse ==========
+                logger.error(f"DIAG stage1_parse: count=0")
+                raise RuntimeError("DIAG stage1_parse=0: 入力データが空。")
+
+                # 空の45列DataFrame作成
+                df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
+
+            # 最終整形処理（CSV直前） - 両コード空除去とCSV重複削除のみ
+            if not df.empty:
+                try:
+                    from utils.finalize_csv import finalize_csv_rows
+
+                    # DataFrameを辞書リストに変換
+                    csv_rows = df.to_dict('records')
+                    original_count = len(csv_rows)
+                    logger.info(f"Starting final CSV cleanup for {original_count} rows")
+
+                    # 両コード空除去と重複除去
+                    finalized_rows = finalize_csv_rows(csv_rows)
+
+                    # ========== DIAG: stage5_finalize ==========
+                    stage5_count = len(finalized_rows)
+                    logger.info(f"DIAG stage5_finalize: count={stage5_count}")
+                    if stage5_count == 0:
+                        # スナップショット作成
+                        snapshot_dir = create_diag_snapshot(
+                            raw_response=None,
+                            parsed_data=json_data,
+                            reconciled_data=None,
+                            mjs45_csv=df,
+                            finalized_csv=pd.DataFrame(csv_rows),
+                            error_msg="stage5_finalize=0: 後段整形で全除去"
+                        )
+                        raise RuntimeError(f"DIAG stage5_finalize=0: 後段整形で全除去。条件過剰 or 前段/名寄せ不整合。snapshot={snapshot_dir}")
+
+                    # 整形後のDataFrameに変換
+                    if finalized_rows:
+                        df = pd.DataFrame(finalized_rows)
+                        # 必要な列が不足している場合は補完
+                        for col in MJSConverter.MJS_45_COLUMNS:
+                            if col not in df.columns:
+                                df[col] = ""
+                        # 列順序を45列形式に合わせる
+                        df = df.reindex(columns=MJSConverter.MJS_45_COLUMNS, fill_value="")
+
+                        # 仕訳No（伝票NO）順にソート
+                        if "伝票NO" in df.columns and not df.empty:
+                            logger.info("Sorting by 伝票NO (voucher number)")
+                            # ソートキーの作成：伝票NO → 借方・貸方の順（借方優先）
+                            # 借方・貸方の判定：（借）科目コードがある = 借方, （貸）科目コードがある = 貸方
+                            df['_sort_debit_credit'] = df.apply(
+                                lambda row: 0 if row.get('（借）科目ｺｰﾄﾞ', '') != '' else 1,
+                                axis=1
+                            )
+                            # 伝票NOを数値としてソート（空文字は最後）
+                            df['_sort_voucher_no'] = pd.to_numeric(df['伝票NO'], errors='coerce').fillna(float('inf'))
+
+                            df = df.sort_values(
+                                by=['_sort_voucher_no', '_sort_debit_credit'],
+                                ascending=[True, True]
+                            )
+
+                            # ソート用の一時列を削除
+                            df = df.drop(columns=['_sort_debit_credit', '_sort_voucher_no'])
+                            logger.info(f"Sorted {len(df)} rows by voucher number")
+
+                        dropped_count = original_count - len(finalized_rows)
+                        if dropped_count > 0:
+                            logger.info(f"Final CSV cleanup: {original_count} -> {len(finalized_rows)} rows (dropped {dropped_count} rows with empty codes)")
+                        else:
+                            logger.info(f"Final CSV cleanup completed: {len(finalized_rows)} rows")
+                    else:
+                        logger.warning("Final CSV cleanup returned no rows")
+                        df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
+
+                except Exception as e:
+                    logger.error(f"Final CSV cleanup failed: {e}")
+                    # エラー時は元のDataFrameをそのまま使用
+                    pass
+
+            # CSV bytes形式で出力
+            csv_buffer = io.StringIO()
+            df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+            csv_bytes = csv_buffer.getvalue().encode('utf-8-sig')
+
+            logger.info(f"CSV data prepared: {len(df)} rows, {len(csv_bytes)} bytes")
+
+            # 科目コード未割当の件数を取得
+            missing_codes_count = len([row for _, row in df.iterrows() if '【科目コード要確認】' in str(row.get('摘要', ''))])
+
+            # メトリクス情報を収集
+            metrics_info = {
+                # ステージ別件数
+                "stage1_count": stage1_count if 'stage1_count' in locals() else 0,
+                "stage4_count": len(df) if 'stage4_count' in locals() else 0,
+                "stage5_count": len(df),
+
+                # 後段整形メトリクス
+                "unassigned_codes": missing_codes_count
+            }
+
+            # 処理情報を準備
+            processing_info = {
+                "entries_extracted": len(df),
+                "missing_codes_count": missing_codes_count,
+                "zero_amount_errors": 0,  # ステップワイズ処理では別途管理
+                "metrics": metrics_info
+            }
+
+            return df, csv_bytes, processing_info
+
+    except Exception as e:
+        logger.error(f"CSV conversion error: {e}", exc_info=True)
+        # エラー時も3つの戻り値を返す - 45列空DataFrame
+        empty_df = pd.DataFrame(columns=MJSConverter.MJS_45_COLUMNS)
+        csv_buffer = io.StringIO()
+        empty_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+        empty_csv_bytes = csv_buffer.getvalue().encode('utf-8-sig')
+
+        error_info = {
+            "entries_extracted": 0,
+            "error": str(e),
+            "metrics": {}
+        }
+
+        return empty_df, empty_csv_bytes, error_info
+
+
 def process_pdf_to_csv(uploaded_file) -> Tuple[pd.DataFrame, bytes, Dict[str, Any]]:
     """
     アップロードされたPDFファイルを処理してCSVデータを返す
-    
+
     Args:
         uploaded_file: Streamlit UploadedFile object
-        
+
     Returns:
         Tuple[pd.DataFrame, bytes, Dict[str, Any]]: (データフレーム, CSV bytes, 処理情報)
     """
