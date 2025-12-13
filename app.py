@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PDF仕訳抽出システム - Streamlit Web App
-Claude Sonnet 4.0を使用してPDFから会計仕訳データを抽出し、CSV形式で出力
+PDF仕訳抽出システム - Streamlit Web App (State Machine Architecture)
+100+ページ対応・ノンブロッキング・段階的処理
 """
 
 # Initialize logging first
@@ -14,9 +14,18 @@ import pandas as pd
 import logging
 from datetime import datetime
 from pathlib import Path
+import time
+import io
+import tempfile
+import shutil
 
 # ローカルモジュール
-from backend_processor import process_pdf_to_csv
+from utils.processing_phases import ProcessingPhase, ProcessingState
+from utils.pdf_splitter import AdaptivePDFSplitter
+from utils.pdf_utils import get_pdf_page_count, validate_pdf
+from backend_processor_stepwise import StepwiseProcessor
+from backend_processor import convert_to_miroku_csv  # CSV変換用
+
 # Import config safely with fallback
 try:
     from config import config
@@ -28,8 +37,8 @@ import yaml
 
 # ページ設定
 st.set_page_config(
-    page_title="PDF仕訳抽出システム", 
-    page_icon="📊", 
+    page_title="PDF仕訳抽出システム",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -38,12 +47,27 @@ st.set_page_config(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 🔐 パスワード認証チェック
+# ===== セッションステート初期化 =====
+if 'processing_state' not in st.session_state:
+    st.session_state.processing_state = ProcessingState()
+
+if 'temp_dir' not in st.session_state:
+    st.session_state.temp_dir = None
+
+if 'uploaded_pdf_bytes' not in st.session_state:
+    st.session_state.uploaded_pdf_bytes = None
+
+if 'stepwise_processor' not in st.session_state:
+    st.session_state.stepwise_processor = None
+
+if 'llm_config' not in st.session_state:
+    st.session_state.llm_config = {}
+
+# ===== パスワード認証 =====
 st.sidebar.markdown("---")
 st.sidebar.markdown("🔐 **認証**")
 password = st.sidebar.text_input("パスワードを入力してください", type="password")
 
-# パスワードチェック
 try:
     app_password = st.secrets.get("APP_PASSWORD")
     if not app_password:
@@ -51,7 +75,7 @@ try:
         st.error("🔐 システム管理者にお問い合わせください")
         st.info("💡 Streamlit Secrets で APP_PASSWORD を設定する必要があります")
         st.stop()
-    
+
     if password != app_password:
         st.error("🚫 パスワードが正しくありません")
         st.info("💡 正しいパスワードを入力してアクセスしてください")
@@ -63,11 +87,10 @@ except Exception as e:
     st.error("🔐 システム管理者にお問い合わせください")
     st.stop()
 
-# LLM プロバイダ選択
+# ===== LLM設定 =====
 st.sidebar.markdown("---")
 st.sidebar.markdown("🤖 **LLM設定**")
 
-# Load configuration
 @st.cache_data
 def load_llm_config():
     try:
@@ -76,16 +99,14 @@ def load_llm_config():
     except Exception as e:
         st.sidebar.error(f"❌ 設定ファイル読込エラー: {e}")
         return {
-            "llm": {"provider": "anthropic", "model": "claude-3-5-sonnet-20240620", "temperature": 0.0},
-            "pricing": {"anthropic": {"claude-3-5-sonnet-20240620": {"in": 0.000003, "out": 0.000015}}}
+            "llm": {"provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.0},
+            "pricing": {}
         }
 
 cfg = load_llm_config()
 
-# Provider selection
-# 現在はGeminiのみ有効（他のプロバイダは一時的に無効化）
-# providers = ["anthropic", "gemini", "openai"]  # 将来的に復活させる場合はこの行のコメントを外す
-providers = ["gemini"]  # Geminiのみ有効
+# Provider selection (Geminiのみ)
+providers = ["gemini"]
 provider_index = 0
 try:
     if cfg["llm"]["provider"] in providers:
@@ -98,14 +119,11 @@ provider = st.sidebar.selectbox(
     providers,
     index=provider_index,
     help="Gemini APIを使用してPDFから仕訳データを抽出します"
-    # help="APIコストを削減したい場合はGeminiを選択、最新モデル使用はClaude Sonnet 4やGPT-5を選択"  # 複数プロバイダ有効時
 )
 
-# Model selection based on provider
+# Model selection
 models_by_provider = {
-    # "anthropic": ["claude-sonnet-4-20250514", "claude-3-5-sonnet-20240620", "claude-3-5-haiku-20240307"],  # 将来的に復活させる場合
     "gemini": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"],
-    # "openai": ["gpt-5", "gpt-5-mini"]  # 将来的に復活させる場合
 }
 
 model_index = 0
@@ -121,53 +139,37 @@ model = st.sidebar.selectbox(
     models_by_provider[provider],
     index=model_index,
     help="Flash系モデルはコストが安く、Pro系は精度重視"
-    # help="Flash系モデルはコストが安く、Pro/Sonnet系は精度重視"  # 複数プロバイダ有効時
 )
 
 # Temperature setting
 temp = st.sidebar.slider(
-    "Temperature", 
-    0.0, 1.0, 
-    value=float(cfg["llm"].get("temperature", 0.0)), 
+    "Temperature",
+    0.0, 1.0,
+    value=float(cfg["llm"].get("temperature", 0.0)),
     step=0.1,
     help="0.0=決定的、1.0=創造的"
 )
 
 # Update session configuration
-if 'llm_config' not in st.session_state:
-    st.session_state.llm_config = {}
-
 st.session_state.llm_config = {
     "provider": provider,
     "model": model,
     "temperature": temp
 }
 
-# Show cost estimation with current exchange rate (一時的にコメントアウト)
-# pricing = cfg.get("pricing", {})
-# if provider in pricing and model in pricing[provider]:
-#     model_pricing = pricing[provider][model]
-#     current_rate = config.get_current_usd_to_jpy_rate()
-#     st.sidebar.info(f"💰 {provider.title()} {model} 単価:\n入力: ¥{model_pricing['in']*current_rate:.4f}/1kトークン\n出力: ¥{model_pricing['out']*current_rate:.4f}/1kトークン\n為替レート: ¥{current_rate:.0f}/USD")
-
-# pricing変数は後で使われるので定義だけ残す
-pricing = cfg.get("pricing", {})
-
 # サイドバー - システム情報
 with st.sidebar:
     st.header("📊 システム情報")
     st.write(f"**AI Engine:** {provider.title()} ({model})")
-    st.write(f"**分割単位:** 5ページ（安定化）")
-    st.write(f"**処理モード:** 🚀 本番（常時）")
-    
-    # API設定確認とエラーハンドリング
+    st.write(f"**分割単位:** 適応型（3-10ページ）")
+    st.write(f"**処理モード:** 🚀 ステップワイズ処理")
+
+    # API設定確認
     try:
-        # 現在はGeminiのみ有効
         if provider == "gemini":
             try:
                 api_key = config.GOOGLE_API_KEY
             except AttributeError:
-                # Fallback to direct environment access
                 import os
                 api_key = os.environ.get("GOOGLE_API_KEY")
 
@@ -176,400 +178,491 @@ with st.sidebar:
             else:
                 st.error("❌ Gemini APIキーが未設定")
                 st.warning("Settings > Secrets でGOOGLE_API_KEYを設定してください")
-
-        # 他のプロバイダは一時的に無効化（将来的に復活させる場合は以下のコメントを外す）
-        # elif provider == "anthropic":
-        #     api_key = config.ANTHROPIC_API_KEY
-        #     if api_key and api_key != 'DUMMY_API_KEY':
-        #         st.success("✅ Anthropic API接続準備完了")
-        #     else:
-        #         st.error("❌ Anthropic APIキーが未設定")
-        #         st.warning("Settings > Secrets でANTHROPIC_API_KEYを設定してください")
-        # elif provider == "openai":
-        #     import os
-        #     api_key = os.environ.get("OPENAI_API_KEY")
-        #     if api_key:
-        #         st.success("✅ OpenAI API接続準備完了")
-        #     else:
-        #         st.error("❌ OpenAI APIキーが未設定")
-        #         st.warning("Settings > Secrets でOPENAI_API_KEYを設定してください")
     except Exception as e:
         st.error(f"❌ API設定エラー: {str(e)}")
         st.info("💡 設定を確認してアプリを再起動してください")
-    
+
     st.divider()
     st.caption(f"Powered by {provider.title()} {model}")
 
-# セッションステート初期化（結果保存用）
-if 'processing_result' not in st.session_state:
-    st.session_state.processing_result = None
-
-# メインコンテンツ
+# ===== メイン処理フロー =====
 st.title("📊 PDF仕訳抽出システム")
 st.markdown("### 📄 PDFファイルから会計仕訳データを自動抽出してCSVで出力")
 
-# アップロード部分
-col1, col2 = st.columns([2, 1])
+# 現在の処理状態
+state = st.session_state.processing_state
 
-with col1:
-    uploaded_file = st.file_uploader(
-        "📁 PDFファイルを選択してください",
-        type=["pdf"],
-        help="PDFファイルをアップロード後、「抽出開始」ボタンで処理を開始します。"
-    )
+# タイムアウトチェック（処理中のみ）
+if state.phase in [ProcessingPhase.SPLITTING, ProcessingPhase.PROCESSING, ProcessingPhase.MERGING]:
+    if state.is_timeout():
+        logger.error(f"Timeout detected: {state.get_elapsed():.1f}s")
+        state.phase = ProcessingPhase.TIMEOUT
+        state.errors.append(f"処理がタイムアウトしました（{state.timeout_seconds}秒経過）")
+        st.rerun()
 
-with col2:
-    if uploaded_file:
-        st.info(f"📄 **ファイル名:** {uploaded_file.name}")
-        st.info(f"📊 **サイズ:** {uploaded_file.size / 1024 / 1024:.1f} MB")
+# ===== フェーズ別処理 =====
 
-# APIキーチェック
-current_provider = st.session_state.llm_config.get("provider", "gemini")  # デフォルトをgeminiに変更
-# 現在はGeminiのみ有効
-if current_provider == "gemini":
-    try:
-        google_api_key = config.GOOGLE_API_KEY
-    except AttributeError:
-        # Fallback to direct environment access
-        import os
-        google_api_key = os.environ.get("GOOGLE_API_KEY")
+# --- IDLE フェーズ: アップロード受付 ---
+if state.phase == ProcessingPhase.IDLE:
+    col1, col2 = st.columns([2, 1])
 
-    if not google_api_key:
-        st.error("🚫 Gemini APIキーが設定されていません")
-        st.info("📝 デプロイ後の設定が必要です。Streamlit SecretsでGOOGLE_API_KEYを設定してください。")
-        st.stop()
-
-# 他のプロバイダは一時的に無効化（将来的に復活させる場合は以下のコメントを外す）
-# elif current_provider == "anthropic":
-#     try:
-#         anthropic_key = config.ANTHROPIC_API_KEY
-#         if not anthropic_key or anthropic_key == 'DUMMY_API_KEY':
-#             st.error("🚫 Anthropic APIキーが設定されていません")
-#             st.info("📝 デプロイ後の設定が必要です。README.mdの手順に従ってAPIキーを設定してください。")
-#             st.stop()
-#     except AttributeError:
-#         st.error("🚫 Configuration error: ANTHROPIC_API_KEY property not available")
-#         st.info("Please check your config.py file and restart the app.")
-#         st.stop()
-# elif current_provider == "openai":
-#     import os
-#     if not os.environ.get("OPENAI_API_KEY"):
-#         st.error("🚫 OpenAI APIキーが設定されていません")
-#         st.info("📝 デプロイ後の設定が必要です。Streamlit SecretsでOPENAI_API_KEYを設定してください。")
-#         st.stop()
-
-# 変換処理 - 抽出開始ボタン
-if uploaded_file is not None:
-    
-    # 動的概算費用計算（選択されたモデルの価格に基づく）- 一時的にコメントアウト
-    # def calculate_flexible_estimate(file_size_bytes, provider, model, pricing_config):
-    #     """選択されたモデルに基づく動的費用概算"""
-    #     # ページ数推定（より正確に）
-    #     estimated_pages = max(1, int(file_size_bytes / (1024 * 250)))  # 250KB/ページ仮定
-    #
-    #     # モデル価格を取得
-    #     model_pricing = pricing_config.get(provider, {}).get(model, {"in": 0.003, "out": 0.015})
-    #
-    #     # トークン数推定（ページあたり）
-    #     tokens_per_page_input = 1500  # 画像+プロンプト概算
-    #     tokens_per_page_output = 800  # レスポンス概算
-    #
-    #     total_input_tokens = estimated_pages * tokens_per_page_input
-    #     total_output_tokens = estimated_pages * tokens_per_page_output
-    #
-    #     # コスト計算
-    #     cost_usd = (total_input_tokens / 1000 * model_pricing["in"] +
-    #                total_output_tokens / 1000 * model_pricing["out"])
-    #
-    #     return estimated_pages, cost_usd
-    #
-    # estimated_pages, estimate_cost_usd = calculate_flexible_estimate(
-    #     uploaded_file.size, provider, model, pricing
-    # )
-    # estimate_cost_jpy = estimate_cost_usd * config.get_current_usd_to_jpy_rate()
-    #
-    # # 概算コスト表示（選択モデル情報付き）
-    # current_model_display = f"{provider.title()} {model}"
-    # st.info(f"📊 **概算** ({current_model_display}): {estimated_pages}ページ予想 / 概算費用: ¥{estimate_cost_jpy:.0f} (${estimate_cost_usd:.3f} USD)")
-    #
-    # # 価格情報表示
-    # if provider in pricing and model in pricing[provider]:
-    #     model_pricing = pricing[provider][model]
-    #     current_rate = config.get_current_usd_to_jpy_rate()
-    #     st.caption(f"💰 {current_model_display} 単価: 入力¥{model_pricing['in']*current_rate:.4f}/1kトークン, 出力¥{model_pricing['out']*current_rate:.4f}/1kトークン (為替レート: ¥{current_rate:.0f}/USD)")
-
-    # current_model_display変数は後で使われるので残す
-    current_model_display = f"{provider.title()} {model}"
-    
-    # Current model display (already defined above)
-    # current_model_display = f"{st.session_state.llm_config['provider'].title()} {st.session_state.llm_config['model']}"
-    
-    # 抽出開始ボタン
-    st.divider()
-    col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
-    with col_btn2:
-        convert_clicked = st.button(
-            "🚀 抽出開始",
-            use_container_width=True,
-            type="primary",
-            help=f"{current_model_display}で仕訳データの抽出を開始します"
+    with col1:
+        uploaded_file = st.file_uploader(
+            "📁 PDFファイルを選択してください",
+            type=["pdf"],
+            help="100ページ以上のPDFにも対応。自動的に最適なサイズで分割処理します。"
         )
-    
-    # 処理実行
-    if convert_clicked:
-        # 自動処理  
-        with st.spinner(f"🔄 {current_model_display}で仕訳データを抽出中..."):
-            try:
-                start_time = datetime.now()
-                
-                # プログレスバー表示
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                status_text.text("📄 PDFを5ページずつ分割中...")
-                progress_bar.progress(25)
-                
-                # Update config.yaml with current UI settings
-                with open("config.yaml", "w", encoding="utf-8") as f:
-                    cfg_copy = cfg.copy()
-                    cfg_copy["llm"]["provider"] = st.session_state.llm_config["provider"]
-                    cfg_copy["llm"]["model"] = st.session_state.llm_config["model"] 
-                    cfg_copy["llm"]["temperature"] = st.session_state.llm_config["temperature"]
-                    yaml.safe_dump(cfg_copy, f, default_flow_style=False, allow_unicode=True)
-                
-                # Clear cache to reload config
-                load_llm_config.clear()
-                
-                # メイン処理
-                df, csv_bytes, processing_info = process_pdf_to_csv(uploaded_file)
-                
-                processing_time = (datetime.now() - start_time).total_seconds()
-                
-                # 処理時間を結果に追加
-                processing_info['processing_time'] = processing_time
-                
-                # 結果をセッションに保存（再表示用）
-                st.session_state.processing_result = (df, csv_bytes, processing_info)
-                
-                progress_bar.progress(75)
-                status_text.text("✅ 5ページチャンク抽出完了！")
-                progress_bar.progress(100)
-                
-                # プログレスバーを削除
-                progress_bar.empty()
-                status_text.empty()
-                
-            except Exception as e:
-                st.error(f"💥 変換に失敗しました: {str(e)}")
-                logger.error(f"PDF processing error: {e}", exc_info=True)
-                
-                processing_time = (datetime.now() - start_time).total_seconds()
-                
-                # エラー時のフォールバック処理
-                df = pd.DataFrame()  # 空のDataFrame
-                csv_bytes = b""
-                processing_info = {
-                    "cost_usd": 0.0, 
-                    "cost_jpy": 0.0, 
-                    "processing_time": processing_time,
-                    "error": str(e)
-                }
-                
-                # エラー結果もセッションに保存
-                st.session_state.processing_result = (df, csv_bytes, processing_info)
-        
-    # 結果表示（処理完了後または既存結果がある場合）
-    if st.session_state.processing_result:
-        df, csv_bytes, processing_info = st.session_state.processing_result
-        processing_time = processing_info.get('processing_time', 0)
-        
-        # 結果表示とエラー警告
-        zero_errors = processing_info.get('zero_amount_errors', 0)
-        missing_codes = processing_info.get('missing_codes_count', 0)
-        
-        if processing_info.get("error"):
-            st.warning(f"⚠️ 処理は完了しましたが、一部でエラーが発生しました: {processing_info['error']}")
-        elif zero_errors > 0 or missing_codes > 0:
-            st.warning(f"⚠️ 処理完了：一部データに注意が必要です")
-        else:
-            st.success(f"🎉 抽出が完了しました！処理時間: {processing_time:.1f}秒")
-        
-        # エラー詳細の表示
-        if zero_errors > 0 or missing_codes > 0:
-            with st.expander("⚠️ データ品質に関する注意事項", expanded=True):
-                if zero_errors > 0:
-                    st.error(f"🚫 金額読取不可エラー: {zero_errors}件")
-                    st.caption("金額が0または読み取れなかった行はCSVから除外されました")
-                
-                if missing_codes > 0:
-                    st.warning(f"🔍 科目コード未割当: {missing_codes}件")
-                    st.caption("摘要に【科目コード要確認】が付記された行があります。手動で科目コードを設定してください")
-                
-                # エラーエントリの詳細表示
-                error_entries = processing_info.get('error_entries', [])
-                if error_entries:
-                    st.subheader("🚫 除外されたエントリ")
-                    for i, err in enumerate(error_entries[:5]):  # 最初の5件のみ表示
-                        st.text(f"{i+1}. 日付: {err.get('伝票日付', 'N/A')}, 金額: {err.get('金額', 0)}, 摘要: {err.get('摘要', '')[:50]}...")
-                    if len(error_entries) > 5:
-                        st.caption(f"... 他 {len(error_entries) - 5} 件")
-        
-        # 処理メトリクス表示
-        metrics = processing_info.get('metrics', {})
-        if metrics and any(v > 0 for v in metrics.values()):
-            with st.expander("📊 処理統計・監査情報", expanded=False):
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.subheader("🔄 前段整形")
-                    if metrics.get('one_vs_many_splits', 0) > 0:
-                        st.metric("one-vs-many分割", metrics['one_vs_many_splits'], help="片側合算行を明細に分割した件数")
-                    if metrics.get('left_right_swaps', 0) > 0:
-                        st.metric("左右入替", metrics['left_right_swaps'], help="借方⇔貸方を自動入替した件数")
-                    if metrics.get('sum_rows_dropped', 0) > 0:
-                        st.metric("合算行除去", metrics['sum_rows_dropped'], help="重複する合算行を除去した件数")
-                
-                with col2:
-                    st.subheader("🔚 後段整形")
-                    if metrics.get('empty_codes_excluded', 0) > 0:
-                        st.metric("両コード空除外", metrics['empty_codes_excluded'], help="借方・貸方コードが両方とも空の行を除外")
-                    if metrics.get('duplicates_excluded', 0) > 0:
-                        st.metric("重複圧縮", metrics['duplicates_excluded'], help="完全重複した行を圧縮")
-                    if metrics.get('unassigned_codes', 0) > 0:
-                        st.metric("未割当要確認", metrics['unassigned_codes'], help="科目コードが割り当てられていない行")
-                
-                with col3:
-                    st.subheader("📈 ステージ推移")
-                    stage_data = {
-                        "parse": metrics.get('stage1_count', 0),
-                        "reconcile": metrics.get('stage2_count', 0), 
-                        "validate": metrics.get('stage3_count', 0),
-                        "assign": metrics.get('stage4_count', 0),
-                        "final": metrics.get('stage5_count', 0)
-                    }
-                    for stage, count in stage_data.items():
-                        if count > 0:
-                            st.metric(f"stage_{stage}", count)
-                
-                # 処理フロー図的表示
-                if all(stage_data.values()):
-                    st.write("**処理フロー:** ", end="")
-                    flow_text = " → ".join([f"{stage}({count})" for stage, count in stage_data.items()])
-                    st.write(flow_text)
-        
-        # 結果サマリー
-        col_result1, col_result2, col_result3 = st.columns(3)
-        with col_result1:
-            st.metric("抽出エントリ数", len(df))
-        with col_result2:
-            st.metric("処理時間", f"{processing_time:.1f}秒")
-        with col_result3:
-            # API費用概算表示（トークンベース）- 一時的にコメントアウト
-            # if processing_info.get("cost_jpy", 0) > 0:
-            #     # 最新レート情報を取得して表示
-            #     try:
-            #         current_rate = config.get_current_usd_to_jpy_rate()
-            #         rate_info = f"為替レート: {current_rate:.2f} JPY/USD"
-            #     except:
-            #         rate_info = "為替レート: 取得失敗"
-            #
-            #     st.metric(
-            #         "API費用実績",
-            #         f"¥{processing_info['cost_jpy']:.2f}",
-            #         help=f"✅ トークン使用量ベースの実際の費用です。\n\n計算値: ${processing_info['cost_usd']:.4f} USD\n{rate_info}\nClaude API利用料金×使用トークン数\n\n※ 為替レート変動により表示金額と請求額が異なる場合があります"
-            #     )
-            # else:
-            #     # フォールバック: トークン情報不明時は概算表示
-            #     pages_processed = processing_info.get('pages_processed', max(1, len(df) // 5))
-            #
-            #     # 選択されたモデルの価格に基づく柔軟な概算
-            #     current_provider = st.session_state.llm_config.get('provider', 'anthropic')
-            #     current_model = st.session_state.llm_config.get('model', 'claude-sonnet-4-20250514')
-            #
-            #     model_pricing = pricing.get(current_provider, {}).get(current_model, {'in': 0.003, 'out': 0.015})
-            #
-            #     # より正確な概算（モデル価格ベース）
-            #     estimated_tokens_in = pages_processed * 1500  # 入力トークン推定
-            #     estimated_tokens_out = pages_processed * 800  # 出力トークン推定
-            #     estimated_cost_usd = (estimated_tokens_in / 1000 * model_pricing['in'] +
-            #                         estimated_tokens_out / 1000 * model_pricing['out'])
-            #
-            #     current_rate = config.get_current_usd_to_jpy_rate()
-            #     estimated_cost_jpy = estimated_cost_usd * current_rate
-            #
-            #     st.metric(
-            #         "API費用概算",
-            #         f"¥{estimated_cost_jpy:.0f}",
-            #         help=f"概算 ({current_provider.title()} {current_model}): {pages_processed}ページ\n入力: {estimated_tokens_in}トークン, 出力: {estimated_tokens_out}トークン\n計算値: ${estimated_cost_usd:.4f} USD (為替: ¥{current_rate:.0f}/USD)\n\n※実際の費用はトークン数により変動します"
-            #     )
-            pass  # 費用表示を一時的に無効化
-        
-        # データプレビュー
-        if not df.empty:
-            st.divider()
-            st.subheader("📋 ミロク取込45列CSV プレビュー")
-            st.info("🔄 抽出された5カラムJSON → ミロク取込45列CSV に変換済み（科目コード自動補完）")
-            
-            # 表示件数選択
-            display_count = st.selectbox(
-                "表示件数を選択", 
-                [10, 25, 50, 100, len(df)],
-                index=1,
-                key="display_count"
-            )
-            
-            # データ表示（UI用にマスキング）
-            from utils.masking import mask_personal_info
-            display_df = df.head(display_count).copy()
-            
-            # 摘要列をマスキング（UIのみ、CSV元データは変更せず）
-            if '摘要' in display_df.columns:
-                display_df['摘要'] = display_df['摘要'].apply(lambda x: mask_personal_info(str(x)) if pd.notna(x) else x)
-            
-            st.dataframe(
-                display_df, 
-                use_container_width=True,
-                hide_index=True
-            )
-            
-            st.caption("※ UI表示では個人識別情報をマスクしています。CSVファイルには元データが保存されます。")
-            
-            if len(df) > display_count:
-                st.info(f"表示: {display_count}件 / 全{len(df)}件")
-        else:
-            st.warning("⚠️ 抽出結果が空でした。PDFの内容をご確認ください。")
-        
-        # ダウンロードボタン
-        st.divider()
-        if len(df) > 0:
-            col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
-            with col_dl2:
-                download_filename = f"{Path(uploaded_file.name).stem}_mjs45_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-                st.download_button(
-                    label="📥 ミロク取込45列CSV をダウンロード",
-                    data=csv_bytes,
-                    file_name=download_filename,
-                    mime="text/csv",
-                    use_container_width=True,
-                    type="secondary",
-                    help="ミロク会計システムに直接取り込み可能な45列形式のCSVファイル"
-                )
-        else:
-            col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
-            with col_dl2:
-                st.button(
-                    "📥 45列CSVをダウンロード (データなし)",
-                    disabled=True,
-                    use_container_width=True,
-                    help="抽出されたデータがありません"
-                )
-        
-        # エラー詳細（デバッグモード時）
-        if config.DEBUG_MODE and processing_info.get("error"):
-            with st.expander("🔍 エラー詳細（デバッグ情報）"):
-                st.code(processing_info["error"])
 
-# 使用方法とヒント
+    with col2:
+        if uploaded_file:
+            st.info(f"📄 **ファイル名:** {uploaded_file.name}")
+            st.info(f"📊 **サイズ:** {uploaded_file.size / 1024 / 1024:.1f} MB")
+
+            # ページ数取得
+            page_count = get_pdf_page_count(uploaded_file)
+            if page_count > 0:
+                st.info(f"📖 **ページ数:** {page_count}ページ")
+
+                # 処理時間の目安を表示
+                estimated_time = page_count * 2  # 1ページあたり2秒の概算
+                estimated_minutes = estimated_time // 60
+                estimated_seconds = estimated_time % 60
+                if estimated_minutes > 0:
+                    st.caption(f"⏱️ 処理時間目安: 約{estimated_minutes}分{estimated_seconds}秒")
+                else:
+                    st.caption(f"⏱️ 処理時間目安: 約{estimated_seconds}秒")
+
+    # APIキーチェック
+    current_provider = st.session_state.llm_config.get("provider", "gemini")
+    if current_provider == "gemini":
+        try:
+            google_api_key = config.GOOGLE_API_KEY
+        except AttributeError:
+            import os
+            google_api_key = os.environ.get("GOOGLE_API_KEY")
+
+        if not google_api_key:
+            st.error("🚫 Gemini APIキーが設定されていません")
+            st.info("📝 デプロイ後の設定が必要です。Streamlit SecretsでGOOGLE_API_KEYを設定してください。")
+            st.stop()
+
+    # 解析開始ボタン
+    if uploaded_file is not None:
+        st.divider()
+        col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
+        with col_btn2:
+            current_model_display = f"{provider.title()} {model}"
+            if st.button(
+                "🚀 解析開始",
+                use_container_width=True,
+                type="primary",
+                help=f"{current_model_display}で仕訳データの抽出を開始します"
+            ):
+                # PDF検証
+                is_valid, error_msg = validate_pdf(uploaded_file)
+                if not is_valid:
+                    st.error(f"❌ PDF検証エラー: {error_msg}")
+                else:
+                    # 処理開始準備
+                    uploaded_file.seek(0)
+                    st.session_state.uploaded_pdf_bytes = uploaded_file.read()
+
+                    # 一時ディレクトリ作成
+                    st.session_state.temp_dir = tempfile.mkdtemp(prefix="pdf_splits_")
+
+                    # 状態初期化
+                    state.reset()
+                    state.phase = ProcessingPhase.SPLITTING
+                    state.pdf_name = uploaded_file.name
+                    state.total_pages = get_pdf_page_count(io.BytesIO(st.session_state.uploaded_pdf_bytes))
+                    state.start_time = time.time()
+
+                    # config.yamlにLLM設定を保存
+                    try:
+                        with open("config.yaml", "w", encoding="utf-8") as f:
+                            cfg_copy = cfg.copy()
+                            cfg_copy["llm"]["provider"] = st.session_state.llm_config["provider"]
+                            cfg_copy["llm"]["model"] = st.session_state.llm_config["model"]
+                            cfg_copy["llm"]["temperature"] = st.session_state.llm_config["temperature"]
+                            yaml.safe_dump(cfg_copy, f, default_flow_style=False, allow_unicode=True)
+                        load_llm_config.clear()
+                    except Exception as e:
+                        logger.warning(f"Failed to update config.yaml: {e}")
+
+                    logger.info(f"Processing started: {state.pdf_name}, {state.total_pages} pages")
+                    st.rerun()
+
+# --- SPLITTING フェーズ: PDF分割 ---
+elif state.phase == ProcessingPhase.SPLITTING:
+    st.info(f"📄 PDF分割中... ({state.total_pages}ページ)")
+
+    try:
+        # 一時ファイルに保存
+        temp_pdf_path = Path(st.session_state.temp_dir) / state.pdf_name
+        with open(temp_pdf_path, 'wb') as f:
+            f.write(st.session_state.uploaded_pdf_bytes)
+
+        # PDF分割実行
+        splitter = AdaptivePDFSplitter(temp_dir=st.session_state.temp_dir)
+        split_files, total_pages, pages_per_split = splitter.split_pdf(temp_pdf_path)
+
+        # 状態更新
+        state.split_files = [str(f) for f in split_files]
+        state.total_splits = len(split_files)
+        state.pages_per_split = pages_per_split
+        state.current_split_index = 0
+        state.split_results = []
+
+        logger.info(f"PDF split completed: {state.total_splits} splits, {pages_per_split} pages/split")
+
+        # 次フェーズへ
+        state.phase = ProcessingPhase.PROCESSING
+        st.rerun()
+
+    except Exception as e:
+        logger.error(f"PDF split failed: {e}", exc_info=True)
+        state.phase = ProcessingPhase.ERROR
+        state.errors.append(f"PDF分割エラー: {str(e)}")
+        st.rerun()
+
+# --- PROCESSING フェーズ: 分割単位で処理 ---
+elif state.phase == ProcessingPhase.PROCESSING:
+    # プログレスバー表示
+    progress = state.get_progress_percentage()
+    st.progress(progress, text=f"処理中... {state.current_split_index}/{state.total_splits} 分割完了")
+
+    # 処理情報表示
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("進捗", f"{state.current_split_index}/{state.total_splits}")
+    with col2:
+        st.metric("成功", state.get_successful_splits_count())
+    with col3:
+        st.metric("経過時間", state.get_elapsed_str())
+
+    # タイムアウト警告（残り5分）
+    elapsed = state.get_elapsed()
+    remaining = state.timeout_seconds - elapsed
+    if remaining <= 300 and remaining > 0:
+        st.warning(f"⏰ 残り時間: 約{int(remaining/60)}分")
+
+    # 1つの分割を処理（ガード: 再実行時に同じ分割を再処理しない）
+    if state.current_split_index < state.total_splits:
+        # StepwiseProcessor初期化（遅延初期化）
+        if st.session_state.stepwise_processor is None:
+            st.session_state.stepwise_processor = StepwiseProcessor()
+
+        processor = st.session_state.stepwise_processor
+        split_path = Path(state.split_files[state.current_split_index])
+
+        st.info(f"🔄 分割 {state.current_split_index + 1}/{state.total_splits} を処理中: {split_path.name}")
+
+        try:
+            # 1分割のみ処理
+            result = processor.process_single_split(
+                split_path=split_path,
+                split_index=state.current_split_index,
+                total_splits=state.total_splits
+            )
+
+            # 結果を保存
+            state.split_results.append(result)
+
+            # 次の分割へ
+            state.current_split_index += 1
+
+            # 次の分割を処理するため、reruns
+            st.rerun()
+
+        except Exception as e:
+            logger.error(f"Split processing failed: {e}", exc_info=True)
+            # エラーでも記録して次へ
+            state.split_results.append({
+                "success": False,
+                "data": [],
+                "error": str(e),
+                "processing_time": 0.0,
+                "split_info": {
+                    "index": state.current_split_index,
+                    "filename": split_path.name,
+                    "pages": "unknown"
+                },
+                "entries_count": 0
+            })
+            state.current_split_index += 1
+            st.rerun()
+
+    else:
+        # 全分割完了 → MERGING へ
+        logger.info(f"All splits processed: {len(state.split_results)} results")
+        state.phase = ProcessingPhase.MERGING
+        st.rerun()
+
+# --- MERGING フェーズ: 結果統合 ---
+elif state.phase == ProcessingPhase.MERGING:
+    st.info("📊 結果を統合中...")
+
+    try:
+        processor = st.session_state.stepwise_processor
+        if processor is None:
+            raise Exception("Processor not initialized")
+
+        # 結果統合
+        merged_result = processor.merge_results(state.split_results)
+
+        if not merged_result["success"]:
+            raise Exception("全ての分割処理が失敗しました")
+
+        all_data = merged_result["all_data"]
+        total_entries = merged_result["total_entries"]
+
+        logger.info(f"Merge completed: {total_entries} entries")
+
+        # CSV変換
+        if total_entries > 0:
+            df, csv_bytes, processing_info = convert_to_miroku_csv(all_data)
+
+            # 最終結果を保存
+            state.final_df = df
+            state.final_csv_bytes = csv_bytes
+            state.processing_info = processing_info
+            state.processing_info['total_processing_time'] = merged_result['total_processing_time']
+            state.processing_info['successful_splits'] = merged_result['successful_splits']
+            state.processing_info['failed_splits'] = merged_result['failed_splits']
+        else:
+            # データなし
+            state.final_df = pd.DataFrame()
+            state.final_csv_bytes = b""
+            state.processing_info = {
+                'total_processing_time': merged_result['total_processing_time'],
+                'successful_splits': merged_result['successful_splits'],
+                'failed_splits': merged_result['failed_splits']
+            }
+
+        # 次フェーズへ
+        state.phase = ProcessingPhase.COMPLETED
+        st.rerun()
+
+    except Exception as e:
+        logger.error(f"Merge failed: {e}", exc_info=True)
+        state.phase = ProcessingPhase.ERROR
+        state.errors.append(f"結果統合エラー: {str(e)}")
+        st.rerun()
+
+# --- COMPLETED フェーズ: 結果表示 ---
+elif state.phase == ProcessingPhase.COMPLETED:
+    # クリーンアップ
+    if st.session_state.temp_dir and Path(st.session_state.temp_dir).exists():
+        try:
+            shutil.rmtree(st.session_state.temp_dir)
+            logger.info(f"Temp directory cleaned up: {st.session_state.temp_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp dir: {e}")
+        st.session_state.temp_dir = None
+
+    # 結果表示
+    df = state.final_df
+    csv_bytes = state.final_csv_bytes
+    processing_info = state.processing_info
+
+    # 成功メッセージ
+    total_time = state.get_elapsed()
+    successful_splits = processing_info.get('successful_splits', 0)
+    failed_splits = processing_info.get('failed_splits', 0)
+
+    if failed_splits > 0:
+        st.warning(f"⚠️ 処理完了（一部エラーあり）: {successful_splits}成功 / {failed_splits}失敗")
+    else:
+        st.success(f"🎉 抽出が完了しました！処理時間: {total_time:.1f}秒")
+
+    # エラー詳細
+    zero_errors = processing_info.get('zero_amount_errors', 0)
+    missing_codes = processing_info.get('missing_codes_count', 0)
+
+    if zero_errors > 0 or missing_codes > 0:
+        with st.expander("⚠️ データ品質に関する注意事項", expanded=True):
+            if zero_errors > 0:
+                st.error(f"🚫 金額読取不可エラー: {zero_errors}件")
+                st.caption("金額が0または読み取れなかった行はCSVから除外されました")
+
+            if missing_codes > 0:
+                st.warning(f"🔍 科目コード未割当: {missing_codes}件")
+                st.caption("摘要に【科目コード要確認】が付記された行があります。手動で科目コードを設定してください")
+
+    # 処理メトリクス
+    metrics = processing_info.get('metrics', {})
+    if metrics and any(v > 0 for v in metrics.values()):
+        with st.expander("📊 処理統計・監査情報", expanded=False):
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.subheader("🔄 前段整形")
+                if metrics.get('one_vs_many_splits', 0) > 0:
+                    st.metric("one-vs-many分割", metrics['one_vs_many_splits'])
+                if metrics.get('left_right_swaps', 0) > 0:
+                    st.metric("左右入替", metrics['left_right_swaps'])
+                if metrics.get('sum_rows_dropped', 0) > 0:
+                    st.metric("合算行除去", metrics['sum_rows_dropped'])
+
+            with col2:
+                st.subheader("🔚 後段整形")
+                if metrics.get('empty_codes_excluded', 0) > 0:
+                    st.metric("両コード空除外", metrics['empty_codes_excluded'])
+                if metrics.get('duplicates_excluded', 0) > 0:
+                    st.metric("重複圧縮", metrics['duplicates_excluded'])
+                if metrics.get('unassigned_codes', 0) > 0:
+                    st.metric("未割当要確認", metrics['unassigned_codes'])
+
+            with col3:
+                st.subheader("📈 処理サマリ")
+                st.metric("総分割数", state.total_splits)
+                st.metric("成功分割", successful_splits)
+                st.metric("失敗分割", failed_splits)
+
+    # 結果サマリー
+    col_result1, col_result2, col_result3 = st.columns(3)
+    with col_result1:
+        st.metric("抽出エントリ数", len(df) if df is not None else 0)
+    with col_result2:
+        st.metric("処理時間", f"{total_time:.1f}秒")
+    with col_result3:
+        st.metric("処理ページ数", state.total_pages)
+
+    # データプレビュー
+    if df is not None and not df.empty:
+        st.divider()
+        st.subheader("📋 ミロク取込45列CSV プレビュー")
+        st.info("🔄 抽出された5カラムJSON → ミロク取込45列CSV に変換済み（科目コード自動補完）")
+
+        # 表示件数選択
+        display_count = st.selectbox(
+            "表示件数を選択",
+            [10, 25, 50, 100, len(df)],
+            index=1,
+            key="display_count"
+        )
+
+        # データ表示（UI用にマスキング）
+        from utils.masking import mask_personal_info
+        display_df = df.head(display_count).copy()
+
+        # 摘要列をマスキング
+        if '摘要' in display_df.columns:
+            display_df['摘要'] = display_df['摘要'].apply(lambda x: mask_personal_info(str(x)) if pd.notna(x) else x)
+
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.caption("※ UI表示では個人識別情報をマスクしています。CSVファイルには元データが保存されます。")
+
+        if len(df) > display_count:
+            st.info(f"表示: {display_count}件 / 全{len(df)}件")
+    else:
+        st.warning("⚠️ 抽出結果が空でした。PDFの内容をご確認ください。")
+
+    # ダウンロードボタン
+    st.divider()
+    if df is not None and len(df) > 0:
+        col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
+        with col_dl2:
+            download_filename = f"{Path(state.pdf_name).stem}_mjs45_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            st.download_button(
+                label="📥 ミロク取込45列CSV をダウンロード",
+                data=csv_bytes,
+                file_name=download_filename,
+                mime="text/csv",
+                use_container_width=True,
+                type="secondary",
+                help="ミロク会計システムに直接取り込み可能な45列形式のCSVファイル"
+            )
+    else:
+        col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
+        with col_dl2:
+            st.button(
+                "📥 45列CSVをダウンロード (データなし)",
+                disabled=True,
+                use_container_width=True,
+                help="抽出されたデータがありません"
+            )
+
+    # リセットボタン
+    st.divider()
+    col_reset1, col_reset2, col_reset3 = st.columns([1, 2, 1])
+    with col_reset2:
+        if st.button("🔄 新しいPDFを処理", use_container_width=True):
+            state.reset()
+            st.session_state.uploaded_pdf_bytes = None
+            st.session_state.stepwise_processor = None
+            st.rerun()
+
+# --- ERROR フェーズ: エラー表示 ---
+elif state.phase == ProcessingPhase.ERROR:
+    # クリーンアップ
+    if st.session_state.temp_dir and Path(st.session_state.temp_dir).exists():
+        try:
+            shutil.rmtree(st.session_state.temp_dir)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp dir: {e}")
+        st.session_state.temp_dir = None
+
+    st.error("❌ 処理中にエラーが発生しました")
+
+    # エラー詳細
+    with st.expander("🔍 エラー詳細", expanded=True):
+        for i, err in enumerate(state.errors, 1):
+            st.text(f"{i}. {err}")
+
+    # リセットボタン
+    col_reset1, col_reset2, col_reset3 = st.columns([1, 2, 1])
+    with col_reset2:
+        if st.button("🔄 最初から やり直す", use_container_width=True, type="primary"):
+            state.reset()
+            st.session_state.uploaded_pdf_bytes = None
+            st.session_state.stepwise_processor = None
+            st.rerun()
+
+# --- TIMEOUT フェーズ: タイムアウト表示 ---
+elif state.phase == ProcessingPhase.TIMEOUT:
+    # クリーンアップ
+    if st.session_state.temp_dir and Path(st.session_state.temp_dir).exists():
+        try:
+            shutil.rmtree(st.session_state.temp_dir)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp dir: {e}")
+        st.session_state.temp_dir = None
+
+    st.error(f"⏰ 処理がタイムアウトしました（制限時間: {state.timeout_seconds//60}分）")
+
+    # 進捗情報
+    st.info(f"📊 処理進捗: {state.current_split_index}/{state.total_splits} 分割完了")
+
+    # 部分結果があれば表示
+    if state.split_results:
+        st.warning("⚠️ 処理途中までのデータがあります。部分的に処理できた可能性があります。")
+
+        successful = state.get_successful_splits_count()
+        failed = state.get_failed_splits_count()
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("成功した分割", successful)
+        with col2:
+            st.metric("失敗した分割", failed)
+
+    # リセットボタン
+    st.divider()
+    col_reset1, col_reset2, col_reset3 = st.columns([1, 2, 1])
+    with col_reset2:
+        if st.button("🔄 最初から やり直す", use_container_width=True, type="primary"):
+            state.reset()
+            st.session_state.uploaded_pdf_bytes = None
+            st.session_state.stepwise_processor = None
+            st.rerun()
+
+# ===== 使用方法とヒント =====
 st.divider()
 with st.expander("📖 使用方法とヒント"):
     st.markdown("""
@@ -578,10 +671,12 @@ with st.expander("📖 使用方法とヒント"):
        - 上の「📁 PDFファイルを選択してください」エリアをクリック
        - または、ファイルをドラッグ&ドロップ
        - 対応形式: PDFファイル (.pdf)
+       - **100ページ以上のPDFにも対応**
 
-    2. **抽出開始**
-       - 「🚀 抽出開始」ボタンをクリック
-       - 処理中は画面を閉じないでください
+    2. **解析開始**
+       - 「🚀 解析開始」ボタンをクリック
+       - 処理は段階的に進み、進捗状況が表示されます
+       - 画面を閉じずにお待ちください
 
     3. **結果を確認**
        - 抽出された仕訳データが表示されます
@@ -591,82 +686,55 @@ with st.expander("📖 使用方法とヒント"):
        - 「📥 ミロク取込45列CSVをダウンロード」ボタンをクリック
        - ダウンロードしたCSVファイルをミロク会計システムに取り込み
 
+    ### 🚀 ステップワイズ処理の特徴
+    - **大規模PDF対応**: 100ページ以上のPDFも処理可能
+    - **適応型分割**: PDFサイズに応じて最適な分割サイズを自動決定
+      - 小規模（~30ページ）: 10ページずつ
+      - 中規模（~100ページ）: 5ページずつ
+      - 大規模（100ページ~）: 3ページずつ
+    - **UI非ブロッキング**: 処理中も進捗状況をリアルタイム表示
+    - **タイムアウト保護**: 15分の制限時間（残り5分で警告表示）
+    - **エラー耐性**: 一部の分割が失敗しても処理続行
+
     ### 📊 このシステムの会計処理ロジック
-
-    **システムが行う処理:**
-    PDFから仕訳データを抽出し、複式簿記の原則に従って整形します。
-    最終的にミロク会計システムに取り込める45列CSV形式で出力します。
-
-    **複式簿記の原則（AIへの指示内容）:**
-
-    AIには以下のルールで処理するよう指示しています：
+    **複式簿記の原則:**
     - ✓ 1取引 = 借方1本以上 + 貸方1本以上
     - ✓ 借方合計 = 貸方合計（必ず一致）
     - ✓ 借方のみ・貸方のみの単一仕訳は禁止
 
-    レイアウト認識:
-    - ✓ 左列 = 借方
-    - ✓ 右列 = 貸方
-    - ✓ 中央 = 摘要（取引内容）
-
-    出力項目（5項目を抽出）:
+    **出力項目:**
     1. 伝票日付（取引日）
     2. 借貸区分（「借方」または「貸方」）
     3. 科目名（勘定科目）
     4. 金額（正の整数、カンマ除去済み）
     5. 摘要（取引内容、契約者名、物件名など）
 
-    **複合仕訳の処理:**
-    - 1対多の仕訳: 例「借方:現金 100,000」⇔「貸方:売上 70,000、受取利息 30,000」→ 3行出力
-    - 多対1の仕訳: 例「借方:水道光熱費 50,000、通信費 30,000」⇔「貸方:普通預金 80,000」→ 3行出力
-    - 同一伝票内で借方合計と貸方合計が必ず一致するよう処理
-
     **科目コードの割当:**
     - 抽出された科目名を「勘定科目コード一覧.csv」と照合し、自動的に科目コードを割り当て
     - 照合方法: ①完全一致 → ②エイリアス（揺らぎ対応） → ③部分一致
-    - 未割当の場合: 摘要欄に「【科目コード要確認】」を付記 → 取り込み前に手動設定が必要
-
-    **自動整形処理:**
-    - 前段整形: 合算行の分割、借方⇔貸方の入替、重複行除去
-    - 後段整形: 不完全な仕訳の除外、重複仕訳の圧縮、伝票番号順ソート
-
-    **取り込み前の確認事項:**
-    - ✓ 摘要欄に「【科目コード要確認】」がある行 → 正しい科目コードを手動設定
-    - ✓ 金額の桁数 → 誤認識がないか確認
-    - ✓ 借方・貸方の合計 → 同一伝票内で一致しているか
-    - ✓ 日付 → 会計期間内の正しい日付か
-
-    **エラー・警告の意味:**
-    - 金額読取不可エラー: 金額が0円または読み取れなかった仕訳を除外
-    - 科目コード未割当: 科目コードが割り当てられず【科目コード要確認】と表示
-    - 両コード空除外: 借方・貸方の科目コードが両方空の不完全な仕訳を除外
-    - 重複圧縮: 完全に同一の仕訳を1行にまとめた件数
+    - 未割当の場合: 摘要欄に「【科目コード要確認】」を付記
 
     ### ⚠️ アップロード時の注意点
     - **推奨ファイル**: 明細が表形式で記載された通帳・請求書・領収書のPDF
     - **非推奨**: 手書き文字、スキャン品質が低い、文字が不鮮明なPDF
-    - **ファイルサイズ**: 大きなファイル（100ページ以上）は処理に数分かかる場合があります
-    - **レイアウト**: 表形式が崩れているPDFは抽出精度が下がることがあります
+    - **処理時間**: ページ数に応じて時間がかかります（目安: 1ページあたり2秒）
+    - **タイムアウト**: 15分以内に処理が完了しない場合は自動停止
 
     ### 🔧 トラブルシューティング
-    **Q: 抽出結果が空になる**
-    - PDFに表形式の仕訳データがあるか確認してください
-    - PDFの画質が悪い場合は、元ファイルを再取得してください
+    **Q: 処理がタイムアウトする**
+    - 非常に大きなPDF（200ページ以上）の場合、タイムアウトする可能性があります
+    - PDFを分割して複数回に分けて処理してください
 
-    **Q: 金額が正しく抽出されない**
-    - 元のPDFで金額が明確に記載されているか確認してください
-    - カンマ区切りの数字が正しく表示されているか確認してください
-
-    **Q: 処理時間が長い**
-    - ページ数が多い場合は時間がかかります（目安: 5ページあたり10-20秒）
-    - 処理中は他の操作を行わず、完了まで待機してください
+    **Q: 一部の分割が失敗する**
+    - 画質が悪いページがある場合、そのページの処理が失敗することがあります
+    - 成功した分割のデータは正常に抽出されます
 
     **Q: エラーが表示される**
-    - ページをリロードして再度お試しください
+    - 「🔄 最初からやり直す」ボタンで処理をリセットできます
     - それでも解決しない場合は、PDFファイルを確認してください
 
     ### 🔒 セキュリティとプライバシー
-    - アップロードされたPDFは一時的にメモリ上で処理されます
+    - アップロードされたPDFは一時的に処理され、完了後に自動削除されます
     - 処理完了後、サーバーにはデータが残りません
     - 個人情報を含むデータは慎重に取り扱ってください
     """)
@@ -674,4 +742,3 @@ with st.expander("📖 使用方法とヒント"):
 # フッター
 st.divider()
 st.caption("📊 PDF仕訳抽出システム | Powered by Gemini | Built with Streamlit")
-# st.caption("📊 PDF仕訳抽出システム | Powered by Claude Sonnet 4.0 | Built with Streamlit")  # 将来的に復活させる場合
