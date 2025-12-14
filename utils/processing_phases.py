@@ -15,10 +15,10 @@ logger = logging.getLogger(__name__)
 
 
 class ProcessingPhase(Enum):
-    """処理フェーズの定義"""
+    """処理フェーズの定義（全体レベル）"""
     IDLE = "idle"                    # 待機中
     SPLITTING = "splitting"          # PDF分割中
-    PROCESSING = "processing"        # 分割単位で処理中
+    PROCESSING = "processing"        # 分割単位で処理中（フェーズベース）
     MERGING = "merging"              # 結果統合中
     COMPLETED = "completed"          # 完了
     ERROR = "error"                  # エラー
@@ -27,7 +27,7 @@ class ProcessingPhase(Enum):
 
 @dataclass
 class ProcessingState:
-    """処理状態の完全な定義"""
+    """処理状態の完全な定義（Phase3: フェーズベース対応）"""
 
     # フェーズ管理
     phase: ProcessingPhase = ProcessingPhase.IDLE
@@ -41,17 +41,20 @@ class ProcessingState:
     total_splits: int = 0
     pages_per_split: int = 0  # 分割サイズ
 
-    # 処理進捗
+    # 処理進捗（Phase3: Split-level phase states）
     current_split_index: int = 0
     split_results: List[Dict[str, Any]] = field(default_factory=list)  # 各分割の処理結果
+    split_states_data: List[Dict[str, Any]] = field(default_factory=list)  # Split phase states (serializable)
 
     # エラー・警告
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
-    # タイムアウト管理
+    # タイムアウト管理（Phase3: 進捗ベース）
     start_time: float = 0.0
     timeout_seconds: int = 900  # 15分
+    phase_stall_count: int = 0  # 同じフェーズで停滞している回数
+    max_phase_stall: int = 5  # 同じフェーズで5回連続停滞したら中断
 
     # 最終結果
     final_df: Optional[Any] = None  # pandas DataFrameだがserializable対応のためAny
@@ -150,11 +153,22 @@ class ProcessingState:
         self.pages_per_split = 0
         self.current_split_index = 0
         self.split_results = []
+        self.split_states_data = []
         self.errors = []
         self.warnings = []
         self.start_time = 0.0
+        self.phase_stall_count = 0
         self.final_df = None
         self.final_csv_bytes = None
         self.processing_info = {}
 
         logger.info("Processing state reset")
+
+    def is_phase_stalled(self) -> bool:
+        """
+        フェーズが停滞しているかチェック
+
+        Returns:
+            bool: 停滞している場合True
+        """
+        return self.phase_stall_count >= self.max_phase_stall

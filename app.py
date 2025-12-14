@@ -21,9 +21,10 @@ import shutil
 
 # ローカルモジュール
 from utils.processing_phases import ProcessingPhase, ProcessingState
+from utils.split_phases import SplitPhase, SplitProcessingState
 from utils.pdf_splitter import AdaptivePDFSplitter
 from utils.pdf_utils import get_pdf_page_count, validate_pdf
-from backend_processor_stepwise import StepwiseProcessor
+from backend_processor_phase import PhaseBasedProcessor  # Phase3: 新しいプロセッサ
 from backend_processor import convert_to_miroku_csv  # CSV変換用
 
 # Import config safely with fallback
@@ -57,8 +58,11 @@ if 'temp_dir' not in st.session_state:
 if 'uploaded_pdf_bytes' not in st.session_state:
     st.session_state.uploaded_pdf_bytes = None
 
-if 'stepwise_processor' not in st.session_state:
-    st.session_state.stepwise_processor = None
+if 'phase_processor' not in st.session_state:
+    st.session_state.phase_processor = None
+
+if 'current_split_state' not in st.session_state:
+    st.session_state.current_split_state = None
 
 if 'llm_config' not in st.session_state:
     st.session_state.llm_config = {}
@@ -326,7 +330,7 @@ elif state.phase == ProcessingPhase.SPLITTING:
         state.errors.append(f"PDF分割エラー: {str(e)}")
         st.rerun()
 
-# --- PROCESSING フェーズ: 分割単位で処理 ---
+# --- PROCESSING フェーズ: 分割単位で処理（Phase3: フェーズベース） ---
 elif state.phase == ProcessingPhase.PROCESSING:
     # プログレスバー表示
     progress = state.get_progress_percentage()
@@ -347,73 +351,134 @@ elif state.phase == ProcessingPhase.PROCESSING:
     if remaining <= 300 and remaining > 0:
         st.warning(f"⏰ 残り時間: 約{int(remaining/60)}分")
 
-    # 1つの分割を処理（ガード: 再実行時に同じ分割を再処理しない）
-    if state.current_split_index < state.total_splits:
-        # StepwiseProcessor初期化（遅延初期化）
-        if st.session_state.stepwise_processor is None:
-            st.session_state.stepwise_processor = StepwiseProcessor()
+    # Phase3: フェーズ停滞チェック
+    if state.is_phase_stalled():
+        logger.error(f"Phase stalled: {state.phase_stall_count} consecutive stalls")
+        state.phase = ProcessingPhase.ERROR
+        state.errors.append("処理が停滞しました（同じフェーズで進捗なし）")
+        st.rerun()
 
-        processor = st.session_state.stepwise_processor
+    # 1つの分割を処理（Phase3: フェーズごとに分解）
+    if state.current_split_index < state.total_splits:
+        # PhaseBasedProcessor初期化（遅延初期化）
+        if st.session_state.phase_processor is None:
+            st.session_state.phase_processor = PhaseBasedProcessor()
+
+        processor = st.session_state.phase_processor
         split_path = Path(state.split_files[state.current_split_index])
 
-        # Phase2: 処理中表示（st.spinnerで処理中であることを明示）
-        with st.spinner(f"🔄 分割 {state.current_split_index + 1}/{state.total_splits} を処理中: {split_path.name} (最大120秒)"):
+        # 現在の分割の処理状態を取得または作成
+        if st.session_state.current_split_state is None:
+            # ページ範囲を抽出
+            filename = split_path.stem
+            page_range = "unknown"
+            if '_pages_' in filename:
+                try:
+                    page_range = filename.split('_pages_')[1]
+                except:
+                    pass
+
+            parts = page_range.split('-')
+            if len(parts) == 2:
+                try:
+                    page_start = int(parts[0])
+                    page_end = int(parts[1])
+                except:
+                    page_start = state.current_split_index * state.pages_per_split + 1
+                    page_end = (state.current_split_index + 1) * state.pages_per_split
+            else:
+                page_start = state.current_split_index * state.pages_per_split + 1
+                page_end = (state.current_split_index + 1) * state.pages_per_split
+
+            # 新しい分割状態を作成
+            st.session_state.current_split_state = SplitProcessingState(
+                split_index=state.current_split_index,
+                split_path=str(split_path),
+                page_start=page_start,
+                page_end=page_end,
+                phase=SplitPhase.GEMINI_CALL
+            )
+            logger.info(f"Created new split state for split {state.current_split_index+1}/{state.total_splits}")
+
+        split_state = st.session_state.current_split_state
+
+        # 現在のフェーズを表示
+        phase_display = {
+            SplitPhase.GEMINI_CALL: "🤖 Gemini API 呼び出し中",
+            SplitPhase.JSON_PARSE: "📊 JSON パース中",
+            SplitPhase.POSTPROCESS: "🔧 データ後処理中",
+            SplitPhase.VALIDATION: "✅ データ検証中",
+            SplitPhase.COMPLETED: "✓ 完了",
+            SplitPhase.FAILED: "❌ 失敗"
+        }
+        current_phase_text = phase_display.get(split_state.phase, split_state.phase.value)
+
+        st.info(f"📄 分割 {state.current_split_index+1}/{state.total_splits}: {current_phase_text}")
+
+        # Phase3: 1フェーズだけ処理
+        with st.spinner(f"{current_phase_text}..."):
             try:
-                # Phase2: 1分割のみ処理（タイムアウト120秒）
-                result = processor.process_single_split(
+                # 1フェーズ処理
+                result = processor.process_phase(
+                    split_state=split_state,
                     split_path=split_path,
-                    split_index=state.current_split_index,
-                    total_splits=state.total_splits,
-                    timeout_seconds=120  # Phase2: split単位の厳格なタイムアウト
+                    total_splits=state.total_splits
                 )
 
-                # Phase2: エラーチェック - 失敗時はUIに明示的に表示
-                if not result.get("success", False):
-                    error_msg = result.get("error", "不明なエラー")
-                    logger.error(f"Split {state.current_split_index+1}/{state.total_splits} failed: {error_msg}")
+                # 結果を処理
+                if result["split_complete"]:
+                    # 分割処理完了（成功 or 失敗）
+                    logger.info(
+                        f"Split {state.current_split_index+1}/{state.total_splits} complete: "
+                        f"success={result['success']}"
+                    )
 
-                    # タイムアウトの場合
-                    if result.get("timeout", False):
-                        st.error(f"⏰ 分割 {state.current_split_index+1}/{state.total_splits} がタイムアウトしました（120秒超過）")
-                        st.caption(f"📄 ファイル: {split_path.name}")
-                        st.caption("このページの処理をスキップして次へ進みます...")
-                    else:
-                        # その他のエラー
-                        st.error(f"❌ 分割 {state.current_split_index+1}/{state.total_splits} でエラーが発生しました")
+                    # 結果を保存
+                    final_data = split_state.get_final_data()
+                    state.split_results.append({
+                        "success": result["success"],
+                        "data": final_data,
+                        "error": result.get("error"),
+                        "processing_time": 0.0,
+                        "split_info": {
+                            "index": state.current_split_index,
+                            "filename": split_path.name,
+                            "pages": f"{split_state.page_start}-{split_state.page_end}"
+                        },
+                        "entries_count": len(final_data),
+                        "timeout": False
+                    })
+
+                    # エラーの場合は表示
+                    if not result["success"]:
+                        st.error(f"❌ 分割 {state.current_split_index+1} でエラーが発生しました")
                         with st.expander("🔍 エラー詳細", expanded=False):
-                            st.code(error_msg)
+                            st.code(result.get("error", "不明なエラー"))
                         st.caption("このページの処理をスキップして次へ進みます...")
+                        state.errors.append(f"Split {state.current_split_index+1}: {result.get('error')}")
+                        time.sleep(2)
 
-                    # エラー結果を保存
-                    state.split_results.append(result)
-                    state.errors.append(f"Split {state.current_split_index+1}: {error_msg}")
-
-                    # 次の分割へ進む（エラーをスキップして処理続行）
+                    # 次の分割へ
                     state.current_split_index += 1
-                    time.sleep(2)  # ユーザーに警告を見せる時間
+                    st.session_state.current_split_state = None  # リセット
+                    state.phase_stall_count = 0  # リセット
                     st.rerun()
 
-                # 成功時の処理
-                logger.info(f"Split {state.current_split_index+1}/{state.total_splits} succeeded: {result.get('entries_count', 0)} entries")
-
-                # 結果を保存
-                state.split_results.append(result)
-
-                # 次の分割へ
-                state.current_split_index += 1
-
-                # 次の分割を処理するため、rerun
-                st.rerun()
+                else:
+                    # フェーズ完了、次のフェーズへ
+                    logger.debug(f"Phase {split_state.phase.value} complete, continuing to next phase")
+                    state.phase_stall_count = 0  # 進捗があったのでリセット
+                    st.rerun()
 
             except Exception as e:
-                # Phase2: 予期しないエラー - 例外を絶対に握り潰さない
-                logger.exception(f"Unexpected error in split {state.current_split_index+1}/{state.total_splits}: {e}")
+                # Phase3: 予期しないエラー
+                logger.exception(f"Unexpected error in phase processing: {e}")
 
                 st.error(f"❌ 予期しないエラーが発生しました")
                 with st.expander("🔍 エラー詳細", expanded=True):
                     st.code(str(e))
-                    st.caption(f"📄 ファイル: {split_path.name if split_path else 'unknown'}")
-                    st.caption(f"📍 場所: split処理 ({state.current_split_index+1}/{state.total_splits})")
+                    st.caption(f"📄 ファイル: {split_path.name}")
+                    st.caption(f"📍 フェーズ: {split_state.phase.value}")
 
                 # エラー結果を保存
                 state.split_results.append({
@@ -423,8 +488,8 @@ elif state.phase == ProcessingPhase.PROCESSING:
                     "processing_time": 0.0,
                     "split_info": {
                         "index": state.current_split_index,
-                        "filename": split_path.name if split_path else "unknown",
-                        "pages": "unknown"
+                        "filename": split_path.name,
+                        "pages": f"{split_state.page_start}-{split_state.page_end}"
                     },
                     "entries_count": 0,
                     "timeout": False
@@ -437,6 +502,7 @@ elif state.phase == ProcessingPhase.PROCESSING:
                 with col_err1:
                     if st.button("⏭️ スキップして次へ", type="secondary"):
                         state.current_split_index += 1
+                        st.session_state.current_split_state = None
                         st.rerun()
                 with col_err2:
                     if st.button("🛑 処理を中止", type="primary"):
@@ -457,12 +523,27 @@ elif state.phase == ProcessingPhase.MERGING:
     st.info("📊 結果を統合中...")
 
     try:
-        processor = st.session_state.stepwise_processor
-        if processor is None:
-            raise Exception("Processor not initialized")
+        # Phase3: 直接split_resultsからデータを統合
+        all_data = []
+        successful_splits = 0
+        failed_splits = 0
 
-        # 結果統合
-        merged_result = processor.merge_results(state.split_results)
+        for result in state.split_results:
+            if result.get("success", False):
+                successful_splits += 1
+                if result.get("data"):
+                    all_data.extend(result["data"])
+            else:
+                failed_splits += 1
+
+        merged_result = {
+            "success": successful_splits > 0,
+            "all_data": all_data,
+            "total_entries": len(all_data),
+            "successful_splits": successful_splits,
+            "failed_splits": failed_splits,
+            "total_processing_time": state.get_elapsed()
+        }
 
         if not merged_result["success"]:
             raise Exception("全ての分割処理が失敗しました")
@@ -649,7 +730,8 @@ elif state.phase == ProcessingPhase.COMPLETED:
         if st.button("🔄 新しいPDFを処理", use_container_width=True):
             state.reset()
             st.session_state.uploaded_pdf_bytes = None
-            st.session_state.stepwise_processor = None
+            st.session_state.phase_processor = None
+            st.session_state.current_split_state = None
             st.rerun()
 
 # --- ERROR フェーズ: エラー表示 ---
@@ -675,7 +757,8 @@ elif state.phase == ProcessingPhase.ERROR:
         if st.button("🔄 最初から やり直す", use_container_width=True, type="primary"):
             state.reset()
             st.session_state.uploaded_pdf_bytes = None
-            st.session_state.stepwise_processor = None
+            st.session_state.phase_processor = None
+            st.session_state.current_split_state = None
             st.rerun()
 
 # --- TIMEOUT フェーズ: タイムアウト表示 ---
@@ -713,7 +796,8 @@ elif state.phase == ProcessingPhase.TIMEOUT:
         if st.button("🔄 最初から やり直す", use_container_width=True, type="primary"):
             state.reset()
             st.session_state.uploaded_pdf_bytes = None
-            st.session_state.stepwise_processor = None
+            st.session_state.phase_processor = None
+            st.session_state.current_split_state = None
             st.rerun()
 
 # ===== 使用方法とヒント =====
