@@ -16,9 +16,10 @@ logger = logging.getLogger(__name__)
 class AdaptivePDFSplitter:
     """PDFサイズに応じた適応的分割"""
 
-    # 分割戦略の定義
-    STRATEGY_SMALL = {"pages_per_split": 10, "max_pages": 30}      # 小規模: 10ページずつ
-    STRATEGY_MEDIUM = {"pages_per_split": 5, "max_pages": 100}     # 中規模: 5ページずつ
+    # Phase2: 分割戦略の最適化（10→5, 5→4, 3→3）
+    # Streamlit Cloud最適化: 短い処理 × 多回数
+    STRATEGY_SMALL = {"pages_per_split": 5, "max_pages": 30}       # 小規模: 5ページずつ
+    STRATEGY_MEDIUM = {"pages_per_split": 4, "max_pages": 100}     # 中規模: 4ページずつ
     STRATEGY_LARGE = {"pages_per_split": 3, "max_pages": float('inf')}  # 大規模: 3ページずつ
 
     def __init__(self, temp_dir: Path):

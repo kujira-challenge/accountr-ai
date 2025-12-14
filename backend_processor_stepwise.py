@@ -3,12 +3,14 @@
 """
 ステップワイズPDF処理プロセッサ
 1ステップ＝1分割処理で、Streamlitのrerunモデルに適合
+Phase2対応: split単位の厳格なタイムアウト・例外の即時伝播
 """
 
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 from pdf_extractor import ProductionPDFExtractor
 from config import config
@@ -38,15 +40,22 @@ class StepwiseProcessor:
         self,
         split_path: Path,
         split_index: int,
-        total_splits: int
+        total_splits: int,
+        timeout_seconds: int = 120  # Phase2: split単位の厳格なタイムアウト
     ) -> Dict[str, Any]:
         """
         1つの分割を処理（1ステップ）
+
+        Phase2修正:
+        - split単位の厳格なタイムアウト（デフォルト120秒）
+        - 例外を握り潰さず、詳細なエラー情報を返却
+        - タイムアウト時は専用フラグを設定
 
         Args:
             split_path: 分割ファイルのパス
             split_index: 分割のインデックス（0始まり）
             total_splits: 総分割数
+            timeout_seconds: タイムアウト時間（秒）
 
         Returns:
             Dict: 処理結果
@@ -60,10 +69,11 @@ class StepwiseProcessor:
                         "filename": str,
                         "pages": str  # "1-5" 形式
                     },
-                    "entries_count": int  # 抽出エントリ数
+                    "entries_count": int,  # 抽出エントリ数
+                    "timeout": bool  # タイムアウトフラグ
                 }
         """
-        logger.info(f"Processing split {split_index+1}/{total_splits}: {split_path.name}")
+        logger.info(f"Processing split {split_index+1}/{total_splits}: {split_path.name} (timeout={timeout_seconds}s)")
 
         start_time = time.time()
 
@@ -96,12 +106,35 @@ class StepwiseProcessor:
 
             logger.debug(f"Split page range: {page_start}-{page_end}")
 
-            # API呼び出し（タイムアウト付き）
-            extracted_data = self.extractor.extract_with_retry(
-                split_path,
-                page_start,
-                page_end
-            )
+            # Phase2: タイムアウト付きAPI呼び出し（ThreadPoolExecutorで厳格に制御）
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    self.extractor.extract_with_retry,
+                    split_path,
+                    page_start,
+                    page_end
+                )
+
+                try:
+                    extracted_data = future.result(timeout=timeout_seconds)
+                except TimeoutError:
+                    processing_time = time.time() - start_time
+                    error_msg = f"処理がタイムアウトしました（{timeout_seconds}秒超過）"
+                    logger.error(f"Split {split_index+1}/{total_splits} TIMEOUT: {processing_time:.1f}s > {timeout_seconds}s")
+
+                    return {
+                        "success": False,
+                        "data": [],
+                        "error": error_msg,
+                        "processing_time": processing_time,
+                        "split_info": {
+                            "index": split_index,
+                            "filename": split_path.name,
+                            "pages": page_range
+                        },
+                        "entries_count": 0,
+                        "timeout": True  # タイムアウトフラグ
+                    }
 
             processing_time = time.time() - start_time
             entries_count = len(extracted_data) if extracted_data else 0
@@ -121,12 +154,14 @@ class StepwiseProcessor:
                     "filename": split_path.name,
                     "pages": page_range
                 },
-                "entries_count": entries_count
+                "entries_count": entries_count,
+                "timeout": False
             }
 
         except Exception as e:
+            # Phase2: 例外を握り潰さず、詳細なエラー情報をログ＋返却
             processing_time = time.time() - start_time
-            logger.error(f"Split {split_index+1}/{total_splits} failed: {e}", exc_info=True)
+            logger.exception(f"Split {split_index+1}/{total_splits} FAILED: {e}")
 
             return {
                 "success": False,
@@ -138,7 +173,8 @@ class StepwiseProcessor:
                     "filename": split_path.name if split_path else "unknown",
                     "pages": "unknown"
                 },
-                "entries_count": 0
+                "entries_count": 0,
+                "timeout": False
             }
 
     def merge_results(self, split_results: list) -> Dict[str, Any]:

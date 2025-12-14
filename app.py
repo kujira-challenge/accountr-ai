@@ -161,8 +161,9 @@ st.session_state.llm_config = {
 with st.sidebar:
     st.header("📊 システム情報")
     st.write(f"**AI Engine:** {provider.title()} ({model})")
-    st.write(f"**分割単位:** 適応型（3-10ページ）")
+    st.write(f"**分割単位:** Phase2最適化（3-5ページ）")
     st.write(f"**処理モード:** 🚀 ステップワイズ処理")
+    st.caption("⏱️ Split単位タイムアウト: 120秒")
 
     # API設定確認
     try:
@@ -355,42 +356,95 @@ elif state.phase == ProcessingPhase.PROCESSING:
         processor = st.session_state.stepwise_processor
         split_path = Path(state.split_files[state.current_split_index])
 
-        st.info(f"🔄 分割 {state.current_split_index + 1}/{state.total_splits} を処理中: {split_path.name}")
+        # Phase2: 処理中表示（st.spinnerで処理中であることを明示）
+        with st.spinner(f"🔄 分割 {state.current_split_index + 1}/{state.total_splits} を処理中: {split_path.name} (最大120秒)"):
+            try:
+                # Phase2: 1分割のみ処理（タイムアウト120秒）
+                result = processor.process_single_split(
+                    split_path=split_path,
+                    split_index=state.current_split_index,
+                    total_splits=state.total_splits,
+                    timeout_seconds=120  # Phase2: split単位の厳格なタイムアウト
+                )
 
-        try:
-            # 1分割のみ処理
-            result = processor.process_single_split(
-                split_path=split_path,
-                split_index=state.current_split_index,
-                total_splits=state.total_splits
-            )
+                # Phase2: エラーチェック - 失敗時はUIに明示的に表示
+                if not result.get("success", False):
+                    error_msg = result.get("error", "不明なエラー")
+                    logger.error(f"Split {state.current_split_index+1}/{state.total_splits} failed: {error_msg}")
 
-            # 結果を保存
-            state.split_results.append(result)
+                    # タイムアウトの場合
+                    if result.get("timeout", False):
+                        st.error(f"⏰ 分割 {state.current_split_index+1}/{state.total_splits} がタイムアウトしました（120秒超過）")
+                        st.caption(f"📄 ファイル: {split_path.name}")
+                        st.caption("このページの処理をスキップして次へ進みます...")
+                    else:
+                        # その他のエラー
+                        st.error(f"❌ 分割 {state.current_split_index+1}/{state.total_splits} でエラーが発生しました")
+                        with st.expander("🔍 エラー詳細", expanded=False):
+                            st.code(error_msg)
+                        st.caption("このページの処理をスキップして次へ進みます...")
 
-            # 次の分割へ
-            state.current_split_index += 1
+                    # エラー結果を保存
+                    state.split_results.append(result)
+                    state.errors.append(f"Split {state.current_split_index+1}: {error_msg}")
 
-            # 次の分割を処理するため、reruns
-            st.rerun()
+                    # 次の分割へ進む（エラーをスキップして処理続行）
+                    state.current_split_index += 1
+                    time.sleep(2)  # ユーザーに警告を見せる時間
+                    st.rerun()
 
-        except Exception as e:
-            logger.error(f"Split processing failed: {e}", exc_info=True)
-            # エラーでも記録して次へ
-            state.split_results.append({
-                "success": False,
-                "data": [],
-                "error": str(e),
-                "processing_time": 0.0,
-                "split_info": {
-                    "index": state.current_split_index,
-                    "filename": split_path.name,
-                    "pages": "unknown"
-                },
-                "entries_count": 0
-            })
-            state.current_split_index += 1
-            st.rerun()
+                # 成功時の処理
+                logger.info(f"Split {state.current_split_index+1}/{state.total_splits} succeeded: {result.get('entries_count', 0)} entries")
+
+                # 結果を保存
+                state.split_results.append(result)
+
+                # 次の分割へ
+                state.current_split_index += 1
+
+                # 次の分割を処理するため、rerun
+                st.rerun()
+
+            except Exception as e:
+                # Phase2: 予期しないエラー - 例外を絶対に握り潰さない
+                logger.exception(f"Unexpected error in split {state.current_split_index+1}/{state.total_splits}: {e}")
+
+                st.error(f"❌ 予期しないエラーが発生しました")
+                with st.expander("🔍 エラー詳細", expanded=True):
+                    st.code(str(e))
+                    st.caption(f"📄 ファイル: {split_path.name if split_path else 'unknown'}")
+                    st.caption(f"📍 場所: split処理 ({state.current_split_index+1}/{state.total_splits})")
+
+                # エラー結果を保存
+                state.split_results.append({
+                    "success": False,
+                    "data": [],
+                    "error": f"予期しないエラー: {str(e)}",
+                    "processing_time": 0.0,
+                    "split_info": {
+                        "index": state.current_split_index,
+                        "filename": split_path.name if split_path else "unknown",
+                        "pages": "unknown"
+                    },
+                    "entries_count": 0,
+                    "timeout": False
+                })
+
+                state.errors.append(f"Unexpected error in split {state.current_split_index+1}: {str(e)}")
+
+                # エラー継続か停止かをユーザーに選択させる
+                col_err1, col_err2 = st.columns(2)
+                with col_err1:
+                    if st.button("⏭️ スキップして次へ", type="secondary"):
+                        state.current_split_index += 1
+                        st.rerun()
+                with col_err2:
+                    if st.button("🛑 処理を中止", type="primary"):
+                        state.phase = ProcessingPhase.ERROR
+                        st.rerun()
+
+                # 処理を停止（ユーザーの選択を待つ）
+                st.stop()
 
     else:
         # 全分割完了 → MERGING へ
@@ -686,15 +740,18 @@ with st.expander("📖 使用方法とヒント"):
        - 「📥 ミロク取込45列CSVをダウンロード」ボタンをクリック
        - ダウンロードしたCSVファイルをミロク会計システムに取り込み
 
-    ### 🚀 ステップワイズ処理の特徴
-    - **大規模PDF対応**: 100ページ以上のPDFも処理可能
+    ### 🚀 ステップワイズ処理の特徴（Phase2最適化版）
+    - **大規模PDF対応**: 100ページ以上のPDFも確実に完走
     - **適応型分割**: PDFサイズに応じて最適な分割サイズを自動決定
-      - 小規模（~30ページ）: 10ページずつ
-      - 中規模（~100ページ）: 5ページずつ
+      - 小規模（~30ページ）: 5ページずつ
+      - 中規模（~100ページ）: 4ページずつ
       - 大規模（100ページ~）: 3ページずつ
     - **UI非ブロッキング**: 処理中も進捗状況をリアルタイム表示
-    - **タイムアウト保護**: 15分の制限時間（残り5分で警告表示）
+    - **2段階タイムアウト保護**:
+      - Split単位: 120秒（1分割あたり）
+      - 全体: 15分（残り5分で警告表示）
     - **エラー耐性**: 一部の分割が失敗しても処理続行
+    - **エラー可視化**: エラー発生時は必ずUIに詳細を表示
 
     ### 📊 このシステムの会計処理ロジック
     **複式簿記の原則:**
