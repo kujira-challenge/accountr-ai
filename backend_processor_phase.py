@@ -276,25 +276,49 @@ JSONオブジェクト配列のみ。5キー必須: ["伝票日付","借貸区�
 
     def _phase_json_parse(self, split_state: SplitProcessingState) -> Dict[str, Any]:
         """
-        JSON_PARSEフェーズ: Geminiのレスポンスから JSON をパース
+        JSON_PARSEフェーズ: LLMのレスポンスから JSON をパース（ハング検知付き）
         """
-        logger.info(f"Phase JSON_PARSE: Parsing Gemini response")
+        logger.info(f"Phase JSON_PARSE: Parsing LLM response")
+
+        # P1: ハング検知用タイムアウト設定（10秒）
+        phase_timeout = 10.0
+        phase_start = time.time()
 
         try:
             response = split_state.gemini_response
             if not response:
-                raise ValueError("No Gemini response available")
+                raise ValueError("No LLM response available")
 
             # レスポンスからJSONを抽出
             response_text = response.get("text", "")
             if not response_text:
-                raise ValueError("Empty response from Gemini")
+                raise ValueError("Empty response from LLM")
 
-            # JSON抽出ガードを使用してパース
-            from utils.json_guard import parse_5cols_json
+            # P2診断ログ: レスポンステキストの基本情報
+            logger.info(
+                f"LLMレスポンス情報: テキスト長={len(response_text)}文字, "
+                f"'['={response_text.count('[')}個, "
+                f"']'={response_text.count(']')}個"
+            )
+
+            # JSON抽出ガードを使用してパース（タイムアウト保護付き）
+            from utils.json_guard import parse_5cols_json, JSONExtractionTimeout
+
+            logger.debug("parse_5cols_json() 呼び出し開始")
             parsed_data = parse_5cols_json(response_text)
 
-            logger.info(f"JSON parsed successfully: {len(parsed_data)} entries")
+            # 処理時間チェック（念のため）
+            elapsed = time.time() - phase_start
+            if elapsed > phase_timeout:
+                logger.warning(
+                    f"JSON_PARSE phase completed but took {elapsed:.1f}s "
+                    f"(> {phase_timeout}s threshold)"
+                )
+
+            logger.info(
+                f"JSON parsed successfully: {len(parsed_data)} entries "
+                f"(phase elapsed={elapsed:.2f}s)"
+            )
 
             # 保存
             split_state.parsed_json = parsed_data
@@ -310,8 +334,24 @@ JSONオブジェクト配列のみ。5キー必須: ["伝票日付","借貸区�
                 "next_action": "rerun"
             }
 
+        except JSONExtractionTimeout as e:
+            elapsed = time.time() - phase_start
+            error_msg = (
+                f"JSON解析がタイムアウトしました ({elapsed:.1f}s)。"
+                f"LLM応答が崩れている可能性があります: {str(e)}"
+            )
+            logger.error(error_msg)
+            split_state.mark_failed(error_msg)
+            return {
+                "phase_complete": True,
+                "split_complete": True,
+                "success": False,
+                "error": error_msg,
+                "next_action": "next_split"
+            }
         except Exception as e:
-            logger.error(f"JSON_PARSE phase failed: {e}")
+            elapsed = time.time() - phase_start
+            logger.error(f"JSON_PARSE phase failed: {e} (elapsed={elapsed:.2f}s)")
             split_state.mark_failed(f"JSON parse error: {str(e)}")
             return {
                 "phase_complete": True,

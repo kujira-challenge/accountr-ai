@@ -8,7 +8,8 @@ LLM生応答から安全にJSON配列を抽出・パースする
 import json
 import re
 import logging
-from typing import List, Dict, Any, Optional
+import time
+from typing import List, Dict, Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -81,21 +82,131 @@ def _get_fallback_entry() -> List[Dict]:
         "摘要": "抽出不能【OCR注意:目視確認推奨】"
     }]
 
-def extract_json_array_str(text: str) -> str:
+class JSONExtractionTimeout(Exception):
+    """JSON抽出がタイムアウトした場合の例外"""
+    pass
+
+
+def _extract_json_with_linear_scan(
+    text: str,
+    start_pos: int = 0,
+    timeout_seconds: float = 2.0
+) -> Tuple[Optional[str], int]:
     """
-    テキストから最初のJSON配列文字列を抽出（角括弧補完機能付き）
-    
+    線形スキャンでJSON配列を抽出（catastrophic backtracking回避）
+
+    Args:
+        text: 検索対象テキスト
+        start_pos: 検索開始位置
+        timeout_seconds: タイムアウト時間（秒）
+
+    Returns:
+        Tuple[Optional[str], int]: (抽出されたJSON文字列, 次の検索開始位置)
+                                    見つからない場合は (None, -1)
+
+    Raises:
+        JSONExtractionTimeout: タイムアウト時
+    """
+    start_time = time.perf_counter()
+    text_len = len(text)
+
+    # 最初の '[' を探す
+    open_bracket_pos = text.find('[', start_pos)
+    if open_bracket_pos == -1:
+        return None, -1
+
+    # ネスト深度と文字列リテラル状態を管理しながらスキャン
+    depth = 0
+    in_string = False
+    escape_next = False
+    i = open_bracket_pos
+
+    while i < text_len:
+        # タイムアウトチェック（100文字ごとに1回）
+        if i % 100 == 0:
+            elapsed = time.perf_counter() - start_time
+            if elapsed > timeout_seconds:
+                raise JSONExtractionTimeout(
+                    f"JSON抽出が{timeout_seconds}秒を超えました "
+                    f"(position={i}/{text_len})"
+                )
+
+        char = text[i]
+
+        # エスケープシーケンス処理
+        if escape_next:
+            escape_next = False
+            i += 1
+            continue
+
+        if char == '\\':
+            escape_next = True
+            i += 1
+            continue
+
+        # 文字列リテラルの開始/終了
+        if char == '"':
+            in_string = not in_string
+            i += 1
+            continue
+
+        # 文字列リテラル内では括弧を無視
+        if in_string:
+            i += 1
+            continue
+
+        # 括弧のネスト管理
+        if char == '[':
+            depth += 1
+        elif char == ']':
+            depth -= 1
+
+            # depth==0 になったらJSON配列完成
+            if depth == 0:
+                json_str = text[open_bracket_pos:i+1]
+                next_pos = i + 1
+                return json_str, next_pos
+
+        i += 1
+
+    # 文字列終端まで到達したが対応する ']' が見つからない
+    logger.debug(f"JSON配列が未完成: 開始位置={open_bracket_pos}, 最終depth={depth}")
+    return None, -1
+
+
+def extract_json_array_str(text: str, max_attempts: int = 10, timeout_seconds: float = 2.0) -> str:
+    """
+    テキストから最初のJSON配列文字列を抽出（線形スキャン方式）
+
+    正規表現を使わずに線形スキャンでJSON配列を抽出することで、
+    catastrophic backtrackingを回避し、安定した処理時間を保証します。
+
     Args:
         text: LLMの生レスポンステキスト
-        
+        max_attempts: 最大試行回数（複数の'['から試行）
+        timeout_seconds: タイムアウト時間（秒）
+
     Returns:
         str: 抽出されたJSON配列文字列
-        
+
     Raises:
         ValueError: JSON配列が見つからない場合
+        JSONExtractionTimeout: タイムアウト時
     """
+    overall_start = time.perf_counter()
     text = text.strip()
-    
+
+    # P2診断ログ: 入力テキストの基本情報
+    text_len = len(text)
+    open_count = text.count('[')
+    close_count = text.count(']')
+    logger.info(
+        f"JSON抽出開始: テキスト長={text_len}文字, "
+        f"'['={open_count}個, ']'={close_count}個"
+    )
+    logger.debug(f"先頭200文字: {text[:200]}")
+    logger.debug(f"末尾200文字: {text[-200:]}")
+
     # コードブロックマーカーを除去（```json、```JSON、~~~対応）
     marker_found = False
     for marker in ["```json", "```JSON", "~~~json", "~~~JSON"]:
@@ -106,68 +217,120 @@ def extract_json_array_str(text: str) -> str:
             if end != -1:
                 text = text[start:end].strip()
                 marker_found = True
+                logger.debug(f"コードブロックマーカー除去: {marker}")
                 break
-    
+
     if not marker_found and "```" in text:
         start = text.find("```") + 3
         end = text.rfind("```")
         if end != -1 and end > start:
             text = text[start:end].strip()
-    
-    # 最外層の [ ] を正規表現で抽出
-    pattern = r'\[(?:[^[\]]*(?:\[[^\]]*\])*)*[^[\]]*\]'
-    matches = re.findall(pattern, text, re.DOTALL)
-    
-    if matches:
-        json_str = matches[0].strip()
-        logger.debug(f"JSON配列文字列を抽出: {len(json_str)}文字")
-        return json_str
-    
-    # 角括弧補完を試行（1個だけ不足の場合）
-    logger.debug("正規JSON配列が見つからないため、角括弧補完を試行")
-    
+            logger.debug("汎用コードブロックマーカー除去")
+
+    # 線形スキャンで複数の '[' から試行
+    attempt = 0
+    current_pos = 0
+
+    while attempt < max_attempts:
+        # 全体タイムアウトチェック
+        elapsed = time.perf_counter() - overall_start
+        if elapsed > timeout_seconds:
+            raise JSONExtractionTimeout(
+                f"JSON抽出全体が{timeout_seconds}秒を超えました "
+                f"(試行回数={attempt}/{max_attempts})"
+            )
+
+        try:
+            # 線形スキャンで抽出
+            json_str, next_pos = _extract_json_with_linear_scan(
+                text,
+                start_pos=current_pos,
+                timeout_seconds=timeout_seconds - elapsed
+            )
+
+            if json_str is None:
+                # これ以上 '[' が見つからない
+                logger.debug(f"試行{attempt+1}: これ以上の'['が見つかりません")
+                break
+
+            # JSONとしてパース可能かチェック
+            try:
+                json.loads(json_str)
+                # パース成功
+                logger.info(
+                    f"JSON配列抽出成功: {len(json_str)}文字 (試行{attempt+1}回目)"
+                )
+                return json_str
+            except json.JSONDecodeError as e:
+                # パース失敗 - 次の '[' から再試行
+                logger.debug(
+                    f"試行{attempt+1}: JSONパース失敗 ({e}), "
+                    f"次の位置から再試行"
+                )
+                current_pos = next_pos
+                attempt += 1
+                continue
+
+        except JSONExtractionTimeout:
+            raise
+        except Exception as e:
+            logger.warning(f"試行{attempt+1}で予期しないエラー: {e}")
+            attempt += 1
+            current_pos += 1  # 1文字進めて再試行
+            continue
+
+    # すべての試行が失敗 - 角括弧補完を試行
+    logger.warning(f"正規JSON配列が見つからない（{attempt}回試行）、角括弧補完を試行")
+
     # 開始角括弧がある場合、終了角括弧を補完
     if '[' in text and text.count('[') > text.count(']'):
-        # 最後の ']' を見つけて、その後に ']' を追加
         last_brace = text.rfind('}')
         if last_brace != -1:
-            potential_json = text[:last_brace + 1] + ']'
-            # パターンマッチング再実行
-            matches = re.findall(pattern, potential_json, re.DOTALL)
-            if matches:
+            potential_json = text[text.find('['):last_brace + 1] + ']'
+            try:
+                json.loads(potential_json)
                 logger.info("角括弧補完成功: 終了角括弧を追加")
-                return matches[0].strip()
-    
+                return potential_json
+            except json.JSONDecodeError:
+                logger.debug("終了角括弧補完も失敗")
+
     # 終了角括弧があるが開始角括弧がない場合
     if ']' in text and text.count(']') > text.count('['):
-        # 最初の '{' の前に '[' を追加
         first_brace = text.find('{')
         if first_brace != -1:
-            potential_json = '[' + text
-            matches = re.findall(pattern, potential_json, re.DOTALL)
-            if matches:
+            potential_json = '[' + text[first_brace:]
+            try:
+                json.loads(potential_json)
                 logger.info("角括弧補完成功: 開始角括弧を追加")
-                return matches[0].strip()
-    
-    raise ValueError("JSON配列パターンが見つかりません（角括弧補完も失敗）")
+                return potential_json
+            except json.JSONDecodeError:
+                logger.debug("開始角括弧補完も失敗")
+
+    raise ValueError(
+        f"JSON配列パターンが見つかりません "
+        f"({attempt}回試行、角括弧補完も失敗）"
+    )
 
 def parse_5cols_json(text: str) -> List[Dict]:
     """
     防御的5カラムJSONパーサー - 配列→辞書マッピング＋ゼロ件フォールバック対応
-    
+
     Args:
         text: LLMの生レスポンステキスト
-        
+
     Returns:
         List[Dict]: パースされた5カラムJSONリスト（最低1件保証）
     """
+    parse_start = time.perf_counter()
+
     try:
-        logger.info("防御的パーサー開始: Claude APIレスポンス解析")
-        
-        # 1. JSON文字列を抽出
+        logger.info("防御的パーサー開始: LLMレスポンス解析")
+
+        # 1. JSON文字列を抽出（タイムアウト保護付き）
         json_str = extract_json_array_str(text)
         logger.debug(f"抽出JSON文字列 (先頭500文字): {json_str[:500]}")
-        
+        logger.info(f"JSON文字列抽出完了: {len(json_str)}文字")
+
         # 2. JSONパース
         parsed_data = json.loads(json_str)
         logger.info(f"JSONパース成功: トップレベルの型 = {type(parsed_data)}")
@@ -212,16 +375,33 @@ def parse_5cols_json(text: str) -> List[Dict]:
         if not validated:
             logger.warning("有効エントリ0件 - フォールバック適用")
             validated = _get_fallback_entry()
-        
-        logger.info(f"防御的パーサー完了: {len(validated)}エントリ確定")
+
+        parse_elapsed = time.perf_counter() - parse_start
+        logger.info(
+            f"防御的パーサー完了: {len(validated)}エントリ確定 "
+            f"(処理時間={parse_elapsed:.2f}秒)"
+        )
         return validated
-        
+
+    except JSONExtractionTimeout as e:
+        parse_elapsed = time.perf_counter() - parse_start
+        logger.error(f"JSON抽出タイムアウト: {e} (経過時間={parse_elapsed:.2f}秒)")
+        logger.debug(f"タイムアウト時テキスト（先頭500文字）: {text[:500]}")
+        logger.debug(f"タイムアウト時テキスト（末尾500文字）: {text[-500:]}")
+        return _get_fallback_entry()
     except json.JSONDecodeError as e:
-        logger.error(f"JSON抽出失敗 - パース失敗: {e}")
+        parse_elapsed = time.perf_counter() - parse_start
+        logger.error(
+            f"JSON抽出失敗 - パース失敗: {e} (経過時間={parse_elapsed:.2f}秒)"
+        )
         logger.debug(f"失敗テキスト（先頭500文字）: {text[:500]}")
         return _get_fallback_entry()
     except Exception as e:
-        logger.error(f"防御的パーサーでエラー: {type(e).__name__}: {e}")
+        parse_elapsed = time.perf_counter() - parse_start
+        logger.error(
+            f"防御的パーサーでエラー: {type(e).__name__}: {e} "
+            f"(経過時間={parse_elapsed:.2f}秒)"
+        )
         logger.debug(f"エラー時テキスト（先頭500文字）: {text[:500]}")
         return _get_fallback_entry()
 
