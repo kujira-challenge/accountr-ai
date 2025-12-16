@@ -109,8 +109,8 @@ def load_llm_config():
 
 cfg = load_llm_config()
 
-# Provider selection (Geminiのみ)
-providers = ["gemini"]
+# Provider selection
+providers = ["anthropic", "gemini"]
 provider_index = 0
 try:
     if cfg["llm"]["provider"] in providers:
@@ -122,11 +122,12 @@ provider = st.sidebar.selectbox(
     "LLMプロバイダ",
     providers,
     index=provider_index,
-    help="Gemini APIを使用してPDFから仕訳データを抽出します"
+    help="Claude Sonnet 4.5 (Anthropic) またはGemini APIを使用してPDFから仕訳データを抽出します"
 )
 
 # Model selection
 models_by_provider = {
+    "anthropic": ["claude-sonnet-4-5-20250929", "claude-sonnet-4-5", "claude-3-5-sonnet-20240620"],
     "gemini": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"],
 }
 
@@ -142,7 +143,7 @@ model = st.sidebar.selectbox(
     "モデル",
     models_by_provider[provider],
     index=model_index,
-    help="Flash系モデルはコストが安く、Pro系は精度重視"
+    help="Claude Sonnet 4.5は最新の高精度モデル、Gemini Flash系はコストが安く、Pro系は精度重視"
 )
 
 # Temperature setting
@@ -171,7 +172,19 @@ with st.sidebar:
 
     # API設定確認
     try:
-        if provider == "gemini":
+        if provider == "anthropic":
+            try:
+                api_key = config.ANTHROPIC_API_KEY
+            except AttributeError:
+                import os
+                api_key = os.environ.get("ANTHROPIC_API_KEY")
+
+            if api_key:
+                st.success("✅ Claude API接続準備完了")
+            else:
+                st.error("❌ Claude APIキーが未設定")
+                st.warning("Settings > Secrets でANTHROPIC_API_KEYを設定してください")
+        elif provider == "gemini":
             try:
                 api_key = config.GOOGLE_API_KEY
             except AttributeError:
@@ -238,8 +251,19 @@ if state.phase == ProcessingPhase.IDLE:
                     st.caption(f"⏱️ 処理時間目安: 約{estimated_seconds}秒")
 
     # APIキーチェック
-    current_provider = st.session_state.llm_config.get("provider", "gemini")
-    if current_provider == "gemini":
+    current_provider = st.session_state.llm_config.get("provider", "anthropic")
+    if current_provider == "anthropic":
+        try:
+            anthropic_api_key = config.ANTHROPIC_API_KEY
+        except AttributeError:
+            import os
+            anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
+
+        if not anthropic_api_key:
+            st.error("🚫 Claude APIキーが設定されていません")
+            st.info("📝 デプロイ後の設定が必要です。Streamlit SecretsでANTHROPIC_API_KEYを設定してください。")
+            st.stop()
+    elif current_provider == "gemini":
         try:
             google_api_key = config.GOOGLE_API_KEY
         except AttributeError:

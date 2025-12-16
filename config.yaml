@@ -12,8 +12,8 @@ pdf:
 
 # LLM Provider Settings
 llm:
-  provider: anthropic         # "anthropic" | "gemini" | "openai"  
-  model: claude-sonnet-4-20250514      # Latest Claude Sonnet 4 model (stable)
+  provider: anthropic         # "anthropic" | "gemini" | "openai"
+  model: claude-sonnet-4-5-20250929    # Latest Claude Sonnet 4.5 model (stable)
   temperature: 0.0
   right_col_zoom: false       # Right column zoom flag (moved from pdf section)
 
@@ -22,7 +22,9 @@ pricing:
   anthropic:
     claude-3-5-sonnet-20240620: {in: 0.000003, out: 0.000015}  # Legacy
     claude-3-5-haiku-20240307:  {in: 0.000001, out: 0.000005}  # Legacy
-    claude-sonnet-4-20250514:   {in: 0.000003, out: 0.000015}  # Latest Claude Sonnet 4
+    claude-sonnet-4-20250514:   {in: 0.000003, out: 0.000015}  # Legacy Claude Sonnet 4
+    claude-sonnet-4-5-20250929: {in: 0.000003, out: 0.000015}  # Latest Claude Sonnet 4.5
+    claude-sonnet-4-5:          {in: 0.000003, out: 0.000015}  # Alias for Claude Sonnet 4.5
   gemini:
     gemini-1.5-pro:   {in: 0.0000015, out: 0.000005}  # Legacy
     gemini-1.5-flash: {in: 0.0000003, out: 0.0000006}  # Legacy
@@ -35,7 +37,7 @@ pricing:
 # Legacy Claude API Settings (for backward compatibility)
 claude:
   # Model configuration
-  model: "claude-sonnet-4-20250514"
+  model: "claude-sonnet-4-5-20250929"
   max_tokens: 16384  # Claude最適化: 適切な出力上限（コスト効率重視）
   temperature: 0
   # Enhanced prompt for right column recognition

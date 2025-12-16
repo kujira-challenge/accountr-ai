@@ -2,11 +2,11 @@
 
 AI-Powered Accounting Journal Extraction System
 
-Claude Sonnet 4.0を使用してPDFファイルから会計仕訳データを自動抽出し、CSV形式で出力するStreamlitアプリケーション。
+Claude Sonnet 4.5を使用してPDFファイルから会計仕訳データを自動抽出し、CSV形式で出力するStreamlitアプリケーション。
 
 ## 🚀 特徴
 
-- **高精度AI処理**: Claude Sonnet 4.0の視覚認識による正確な仕訳データ抽出
+- **高精度AI処理**: Claude Sonnet 4.5の視覚認識による正確な仕訳データ抽出
 - **自動分割処理**: 大きなPDFを5ページずつ分割して効率的に処理
 - **リアルタイム処理**: Webブラウザから直接PDF操作、即座にCSV出力
 - **日本語完全対応**: 日本の会計基準に対応した仕訳形式
@@ -15,7 +15,7 @@ Claude Sonnet 4.0を使用してPDFファイルから会計仕訳データを自
 ## 📋 システム要件
 
 - Python 3.8+
-- Claude Sonnet 4.0 API キー (Anthropic)
+- Claude Sonnet 4.5 API キー (Anthropic)
 - 1GB RAM以上推奨
 
 ## 🛠️ ローカル開発環境セットアップ
@@ -32,7 +32,7 @@ pip install -r requirements.txt
 ```env
 # Anthropic Claude API
 ANTHROPIC_API_KEY=sk-ant-api03-your-api-key-here
-ANTHROPIC_MODEL=claude-sonnet-4-0
+ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
 ANTHROPIC_MAX_TOKENS=64000
 ANTHROPIC_BETA_HEADERS=context-1m-2025-08-07
 
@@ -140,13 +140,14 @@ simple_ocr/
 
 ## 💰 API使用料金目安
 
-Claude Sonnet 4.0 料金（参考）：
-- 入力: ~$3 per 1M tokens
-- 出力: ~$15 per 1M tokens
+Claude Sonnet 4.5 料金（2025年）：
+- 入力: $3 per 1M tokens
+- 出力: $15 per 1M tokens
 
 **処理コスト例**：
 - 5ページPDF: 約 $0.05-0.15
 - 20ページPDF: 約 $0.20-0.50
+- 100ページPDF: 約 $1.00-2.50
 
 ## 🛡️ セキュリティ
 

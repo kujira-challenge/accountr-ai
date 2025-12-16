@@ -108,7 +108,7 @@ class Config:
         """Get Google API key from Streamlit secrets or environment variables"""
         return self._get_secret('GOOGLE_API_KEY')
     
-    ANTHROPIC_MODEL = os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-20250514')
+    ANTHROPIC_MODEL = os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-5-20250929')
     ANTHROPIC_MAX_TOKENS = int(os.getenv('ANTHROPIC_MAX_TOKENS', '64000'))  # Claude最適化: 大量データ処理対応
     ANTHROPIC_BETA_HEADERS = os.getenv('ANTHROPIC_BETA_HEADERS', 'context-1m-2025-08-07')  # 修正: 不正な日付形式を修正
     
@@ -220,7 +220,9 @@ class Config:
         "gpt-5": {"input": 0.005, "output": 0.015},
         "gpt-5-mini": {"input": 0.001, "output": 0.003},
         # Anthropic Claude (Latest)
-        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},  # Legacy
         "claude-3-5-sonnet": {"input": 0.003, "output": 0.015},  # Legacy
         # Google Gemini (Latest)
         "gemini-2.5-flash": {"input": 0.0003, "output": 0.0006},
