@@ -109,26 +109,44 @@ def load_llm_config():
 
 cfg = load_llm_config()
 
-# Provider selection
-providers = ["anthropic", "gemini"]
+# Provider selection with user-friendly names
+provider_display_names = {
+    "anthropic": "🤖 Claude (Anthropic)",
+    "gemini": "✨ Gemini (Google)"
+}
+provider_keys = ["anthropic", "gemini"]
 provider_index = 0
 try:
-    if cfg["llm"]["provider"] in providers:
-        provider_index = providers.index(cfg["llm"]["provider"])
+    if cfg["llm"]["provider"] in provider_keys:
+        provider_index = provider_keys.index(cfg["llm"]["provider"])
 except (KeyError, ValueError):
     pass
 
-provider = st.sidebar.selectbox(
+provider_display = st.sidebar.selectbox(
     "LLMプロバイダ",
-    providers,
+    provider_keys,
     index=provider_index,
-    help="Claude Sonnet 4.5 (Anthropic) またはGemini APIを使用してPDFから仕訳データを抽出します"
+    format_func=lambda x: provider_display_names[x],
+    help="Claude Sonnet 4.5は最新の高精度AI、Geminiはコスト効率重視"
 )
+provider = provider_display  # Use the actual key internally
 
-# Model selection
+# Model selection with user-friendly names
 models_by_provider = {
     "anthropic": ["claude-sonnet-4-5-20250929", "claude-sonnet-4-5", "claude-3-5-sonnet-20240620"],
     "gemini": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"],
+}
+
+model_display_names = {
+    # Claude models
+    "claude-sonnet-4-5-20250929": "Claude Sonnet 4.5 (2025/09/29) 🌟",
+    "claude-sonnet-4-5": "Claude Sonnet 4.5 (Latest)",
+    "claude-3-5-sonnet-20240620": "Claude 3.5 Sonnet (Legacy)",
+    # Gemini models
+    "gemini-2.5-flash": "Gemini 2.5 Flash ⚡",
+    "gemini-2.5-pro": "Gemini 2.5 Pro 💎",
+    "gemini-1.5-flash": "Gemini 1.5 Flash (Legacy)",
+    "gemini-1.5-pro": "Gemini 1.5 Pro (Legacy)",
 }
 
 model_index = 0
@@ -143,6 +161,7 @@ model = st.sidebar.selectbox(
     "モデル",
     models_by_provider[provider],
     index=model_index,
+    format_func=lambda x: model_display_names.get(x, x),
     help="Claude Sonnet 4.5は最新の高精度モデル、Gemini Flash系はコストが安く、Pro系は精度重視"
 )
 
@@ -165,7 +184,10 @@ st.session_state.llm_config = {
 # サイドバー - システム情報
 with st.sidebar:
     st.header("📊 システム情報")
-    st.write(f"**AI Engine:** {provider.title()} ({model})")
+    provider_name = provider_display_names.get(provider, provider.title())
+    model_name = model_display_names.get(model, model)
+    st.write(f"**AI Engine:** {provider_name}")
+    st.write(f"**モデル:** {model_name}")
     st.write(f"**分割単位:** Phase2最適化（3-5ページ）")
     st.write(f"**処理モード:** 🚀 ステップワイズ処理")
     st.caption("⏱️ Split単位タイムアウト: 120秒")
@@ -201,7 +223,9 @@ with st.sidebar:
         st.info("💡 設定を確認してアプリを再起動してください")
 
     st.divider()
-    st.caption(f"Powered by {provider.title()} {model}")
+    provider_name_simple = provider_display_names.get(provider, provider.title()).replace("🤖 ", "").replace("✨ ", "")
+    model_name_simple = model_display_names.get(model, model).split(" (")[0]  # Remove date/legacy info
+    st.caption(f"Powered by {provider_name_simple} - {model_name_simple}")
 
 # ===== メイン処理フロー =====
 st.title("📊 PDF仕訳抽出システム")
@@ -280,7 +304,9 @@ if state.phase == ProcessingPhase.IDLE:
         st.divider()
         col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
         with col_btn2:
-            current_model_display = f"{provider.title()} {model}"
+            provider_name_simple = provider_display_names.get(provider, provider.title()).replace("🤖 ", "").replace("✨ ", "")
+            model_name_simple = model_display_names.get(model, model).split(" (")[0]
+            current_model_display = f"{provider_name_simple} - {model_name_simple}"
             if st.button(
                 "🚀 解析開始",
                 use_container_width=True,
@@ -906,4 +932,5 @@ with st.expander("📖 使用方法とヒント"):
 
 # フッター
 st.divider()
-st.caption("📊 PDF仕訳抽出システム | Powered by Gemini | Built with Streamlit")
+provider_name_footer = provider_display_names.get(provider, provider.title()).replace("🤖 ", "").replace("✨ ", "")
+st.caption(f"📊 PDF仕訳抽出システム | Powered by {provider_name_footer} | Built with Streamlit")
